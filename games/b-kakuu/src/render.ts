@@ -92,7 +92,8 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.setLineDash([]);
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
-    const label = l.risk ? `${l.days}日 ⚠${l.risk.label}` : `${l.days}日`;
+    // 狭い画面では危険の名前を省く(拠点の文字と重なるため。名前は道の選択と用語集で見られる)
+    const label = l.risk ? (v.w < 600 ? `${l.days}日⚠` : `${l.days}日 ⚠${l.risk.label}`) : `${l.days}日`;
     const tw = ctx.measureText(label).width + 8;
     ctx.fillStyle = C.paper;
     ctx.fillRect(mx - tw / 2, my - 8, tw, 16);

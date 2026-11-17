@@ -16,7 +16,9 @@ import {
   type Scenario,
   type SimState,
 } from '@hyoro/core';
+import { loadJson, saveJson } from '@hyoro/platform';
 import scenarioJson from '../data/scenario-01.json';
+import { setupGlossary, t } from './glossary';
 import { daysLeftColor, draw, fmt, hitNode, type View } from './render';
 
 const scenario = scenarioJson as unknown as Scenario;
@@ -61,6 +63,7 @@ function reset(): void {
   dest = null;
   dispatchedOnce = false;
   orderKey = '';
+  bestLine = null;
   $('result').hidden = true;
   renderPanel();
 }
@@ -181,7 +184,7 @@ function renderClock(): void {
     const left = daysLeft(state.rice[a.at] ?? 0, nodeConsumptionPerDay(state, a.at)) ?? 0;
     html +=
       `撤退開始まで ${fmt(Math.max(0, sc.goalDays - day))}日 ・ ${nodeName(a.at)} ` +
-      `<b style="color:${daysLeftColor(left)}">あと${left.toFixed(1)}日分</b>`;
+      `<b style="color:${daysLeftColor(left)}">${t('あと何日分', `あと${left.toFixed(1)}日分`)}</b>`;
   } else if (a.phase === 'retreat') {
     html += `<b>撤退中</b> 兵${a.troops}人・米${fmt(a.cargo)} ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
   } else if (a.phase === 'home') {
@@ -190,14 +193,14 @@ function renderClock(): void {
     html += '軍勢は散り散りになった';
   }
   $('clock').innerHTML = html;
-  $('seed').textContent = `シード ${seed}`;
+  $('seed').innerHTML = t('シード', `シード ${seed}`);
 }
 
 function renderRetreat(): void {
   const a = state.army;
   const box = $('retreat');
   if (a.phase !== 'hold') {
-    const lost = a.dropped > 0 ? `<br><span class="bad">離脱した兵: ${a.dropped}人</span>` : '';
+    const lost = a.dropped > 0 ? `<br><span class="bad">${t('離脱')}した兵: ${a.dropped}人</span>` : '';
     box.innerHTML =
       a.phase === 'retreat'
         ? `兵${a.troops}人が蔵へ撤退中。持っている米 ${fmt(a.cargo)}。${lost}`
@@ -224,7 +227,7 @@ function renderRetreat(): void {
     if (s.required <= 0) continue;
     const ok = s.have + EPS >= s.required;
     rows.push(
-      `<div>${nodeName(s.id)}に置いておく: <b class="num">${fmt(s.required)}</b> ` +
+      `<div>${nodeName(s.id)}に${t('置き米')}: <b class="num">${fmt(s.required)}</b> ` +
         `<span class="${ok ? 'good' : 'bad'}">(今 ${fmt(s.have)}${ok ? ' ✓' : ''})</span></div>`,
     );
   }
@@ -233,7 +236,7 @@ function renderRetreat(): void {
       `<div class="bad">⚠ ${nodeName(r.a)}→${nodeName(r.b)}の${r.risk.label}: ${Math.round(r.risk.chance * 100)}%の確率で、持っている米の${Math.round(r.risk.loss * 100)}%を失う(この見積もりには入っていません)</div>`,
     );
   }
-  rows.push('<div class="note">兵は要る分しか受け取りません。多く置いた米は残り、余剰として減点されます。</div>');
+  rows.push(`<div class="note">兵は要る分しか受け取りません。多く置いた米は残り、${t('余剰')}として減点されます。</div>`);
   box.innerHTML = rows.join('');
   box.querySelectorAll<HTMLButtonElement>('[data-retreat]').forEach((b) => {
     b.onclick = () => {
@@ -250,15 +253,15 @@ function renderHint(): void {
   let hint: string;
   if (!dispatchedOnce) {
     hint =
-      '運搬隊を選び、行き先に<b>前線の陣</b>を選んで出発させてください。<br>人足も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>';
+      `${t('運搬隊')}を選び、行き先に<b>前線の${t('陣')}</b>を選んで出発させてください。<br>${t('人足')}も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>`;
   } else if (a.phase === 'retreat') {
-    hint = '撤退中です。蔵の外に残った運搬隊は<b>帰還に数えません</b>。帰りの米を持たせて蔵へ戻してください。';
+    hint = `${t('撤退')}中です。蔵の外に残った${t('運搬隊')}は<b>帰還に数えません</b>。${t('帰り分')}を持たせて蔵へ戻してください。`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
-    hint = `${fmt(goal)}日目に撤退が始まります。<b>撤退路の拠点に米を置き</b>、陣にいる運搬隊は早めに蔵へ戻してください。`;
+    hint = `${fmt(goal)}日目に${t('撤退')}が始まります。<b>撤退路の拠点に${t('置き米')}をし</b>、陣にいる${t('運搬隊')}は早めに蔵へ戻してください。`;
   } else if (!running && state.convoys.some((c) => c.move)) {
     hint = '▶ で時を進めます。';
   } else {
-    hint = '陣に着いた隊は、帰り道の分の米を持たせないと戻れません。';
+    hint = `陣に着いた隊は、${t('帰り分')}の米を持たせないと戻れません。途中の拠点で${t('中継')}することもできます。`;
   }
   $('hint').innerHTML = hint;
 }
@@ -314,7 +317,7 @@ function previewHtml(nodes: string[]): string {
     `人足${c.carriers}人 × ${sc.carrierRation} × ${fmt(p.route.days)}日 = 道中で <b class="num">${fmt(p.eat)}</b> 食べる`,
   ];
   if (p.arrive + EPS < 0) {
-    lines.push('<span class="bad">道中で食料が尽き、人足が離脱します(積み荷も失われます)。</span>');
+    lines.push(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(積み荷も失われます)。</span>`);
   } else if (!p.risks.length) {
     lines.push(`出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(Math.max(0, p.arrive))}</b>`);
   } else {
@@ -442,9 +445,28 @@ function renderOrder(): void {
   };
 }
 
+const isBest = (v: unknown): v is { score: number; seed: number } =>
+  typeof v === 'object' && v !== null && Number.isFinite((v as { score?: unknown }).score) && Number.isFinite((v as { seed?: unknown }).seed);
+
+/**
+ * 最高得点の記録と、その結果の文言。showResult は何度も呼ばれるので、
+ * 遠征ごとに1回だけ記録し(null の間は未記録)、文言を使い回す。
+ */
+let bestLine: string | null = null;
+
+function recordBest(held: boolean, score: number): string {
+  const key = `best:${state.scenario.id}`;
+  const prev = loadJson<{ score: number; seed: number } | null>(key, null, (v): v is { score: number; seed: number } => isBest(v));
+  if (held && (!prev || score > prev.score)) {
+    return saveJson(key, { score, seed }) ? '最高得点を更新しました' : '(この環境では最高得点を保存できません)';
+  }
+  return prev ? `これまでの最高: ${fmt(prev.score)}(シード ${prev.seed})` : '';
+}
+
 function showResult(): void {
   const sc = state.scenario;
   const r = evaluate(state);
+  if (bestLine === null) bestLine = recordBest(r.held, r.score);
   const scoring = sc.scoring ?? { perPerson: 10, perSurplus: 1 };
   let text: string;
   if (!r.held) {
@@ -460,6 +482,7 @@ function showResult(): void {
       `  → −${fmt(r.surplus * scoring.perSurplus)}点(村への負担)`,
       '',
       `得点 ${fmt(r.score)} / 満点 ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
+      bestLine,
     ].join('\n');
   }
   $('result-text').textContent = text;
@@ -495,6 +518,7 @@ canvas.addEventListener('click', (e) => {
 });
 window.addEventListener('resize', resize);
 
+setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
 reset();
 resize();
 requestAnimationFrame(tick);

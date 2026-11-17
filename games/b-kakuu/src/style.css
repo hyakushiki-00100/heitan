@@ -79,3 +79,21 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
   .controls { margin-left: 0; }
 }
 #btn-go { scroll-margin-bottom: 16px; }
+
+/* 用語の説明 */
+.term { border-bottom: 1px dotted var(--ink-2); cursor: help; }
+.term:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tip {
+  position: fixed; z-index: 10; max-width: min(320px, calc(100vw - 32px));
+  background: #fffaf0; border: 1px solid var(--ink-2); padding: 8px 10px;
+  font-size: 13px; line-height: 1.6; box-shadow: 0 2px 8px rgba(43,38,32,.2);
+}
+.tip[hidden] { display: none; }
+.tip-reading { font-size: 11px; color: var(--ink-2); margin-left: 2px; }
+.tip-kind { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); padding: 0 4px; margin-left: 6px; }
+.glossary { max-width: min(560px, calc(100vw - 32px)); max-height: 80vh; background: var(--paper); color: var(--ink); border: 1px solid var(--line); padding: 16px 20px; }
+.glossary::backdrop { background: rgba(43,38,32,.45); }
+.glossary h2 { margin-top: 0; }
+.glossary dt { font-weight: bold; margin-top: 10px; }
+.glossary dd { margin: 2px 0 0; font-size: 14px; line-height: 1.6; }
+.glossary-close { margin-top: 14px; }

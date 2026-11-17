@@ -14,6 +14,7 @@
       <button id="btn-play" type="button">▶ 進める</button>
       <button id="btn-speed" type="button">×1</button>
       <label class="check"><input id="chk-autopause" type="checkbox" checked /> 到着で止める</label>
+      <button id="btn-glossary" type="button">用語集</button>
     </div>
   </header>
   <main>
@@ -21,11 +22,11 @@
     <aside id="panel">
       <p id="hint" class="hint"></p>
       <section>
-        <h2>撤退の備え</h2>
+        <h2><span class="term" tabindex="0" role="button" data-term="撤退">撤退</span>の備え</h2>
         <div id="retreat" class="retreat"></div>
       </section>
       <section>
-        <h2>運搬隊</h2>
+        <h2><span class="term" tabindex="0" role="button" data-term="運搬隊">運搬隊</span></h2>
         <div id="convoys"></div>
       </section>
       <section id="order" hidden>
@@ -44,6 +45,12 @@
       <button id="btn-retry" type="button">もう一度</button>
     </div>
   </div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+  <dialog id="glossary" class="glossary">
+    <h2 tabindex="-1" autofocus>用語集</h2>
+    <dl class="glossary-list"></dl>
+    <button type="button" class="glossary-close">閉じる</button>
+  </dialog>
   <script type="module" src="./src/main.ts"></script>
 </body>
 </html>
