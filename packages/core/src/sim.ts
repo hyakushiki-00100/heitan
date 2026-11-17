@@ -1,6 +1,7 @@
 import { findLink, validateMap, type GameMap } from './map';
 import { Rng } from './rng';
-import { shortestRoute, type Route } from './route';
+import { candidateRoutes, routeFromNodes, routeRisks, shortestRoute, type Route } from './route';
+import type { LinkRisk } from './map';
 import type { Scoring } from './score';
 import { armyCapacity, eatenOver, maxLoad, type Army, type Convoy, type Move } from './unit';
 
@@ -112,7 +113,16 @@ export function validateScenario(sc: Scenario): void {
   }
 }
 
-export function createState(scenario: Scenario): SimState {
+/** 日数最短の道(同じ日数なら candidateRoutes と同じ順で決める) */
+function defaultRoute(sc: Scenario, from: string, to: string): Route | null {
+  return candidateRoutes(sc.map, from, to, 1)[0] ?? null;
+}
+
+/**
+ * 遠征の初期状態を作る。seed を渡すとシナリオの seed の代わりに使う
+ * (遊ぶたびに展開を変えたいとき。同じ seed なら同じ展開になる)。
+ */
+export function createState(scenario: Scenario, seed: number = scenario.seed): SimState {
   validateScenario(scenario);
   const rice: Record<string, number> = {};
   for (const n of scenario.map.nodes) rice[n.id] = scenario.nodes[n.id]?.rice ?? 0;
@@ -130,12 +140,13 @@ export function createState(scenario: Scenario): SimState {
       at: scenario.frontId,
       cargo: 0,
       move: null,
+      retreatNodes: defaultRoute(scenario, scenario.frontId, scenario.depotId)!.nodes,
       phase: 'hold',
       dropped: 0,
     },
     log: [],
     outcome: 'playing',
-    rng: new Rng(scenario.seed),
+    rng: new Rng(seed),
   };
 }
 
@@ -180,16 +191,28 @@ const r1 = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1
 
 export type DispatchResult = { ok: true; route: Route } | { ok: false; error: string };
 
-/** 運搬隊を出発させる。load は拠点の米から積む量。 */
-export function dispatch(state: SimState, convoyId: string, destId: string, load: number): DispatchResult {
+/**
+ * 運搬隊を出発させる。load は拠点の米から積む量。
+ * routeNodes を渡すとその道を通る(出発点と行き先が合っていること)。省略時は日数最短の道。
+ */
+export function dispatch(
+  state: SimState,
+  convoyId: string,
+  destId: string,
+  load: number,
+  routeNodes?: string[],
+): DispatchResult {
   if (state.outcome !== 'playing') return { ok: false, error: '遠征は終わっています' };
   const convoy = state.convoys.find((c) => c.id === convoyId);
   if (!convoy) return { ok: false, error: '運搬隊が見つかりません' };
   if (convoy.dropped) return { ok: false, error: '離脱した隊です' };
   if (convoy.move) return { ok: false, error: '移動中です' };
   if (convoy.at === destId) return { ok: false, error: '同じ拠点です' };
-  const route = shortestRoute(state.scenario.map, convoy.at, destId);
-  if (!route) return { ok: false, error: '道がつながっていません' };
+  const route = routeNodes ? routeFromNodes(state.scenario.map, routeNodes) : defaultRoute(state.scenario, convoy.at, destId);
+  if (!route) return { ok: false, error: routeNodes ? '通れない道です' : '道がつながっていません' };
+  if (route.nodes[0] !== convoy.at || route.nodes[route.nodes.length - 1] !== destId) {
+    return { ok: false, error: '道の出発点か行き先が合っていません' };
+  }
   if (!(load >= 0)) return { ok: false, error: '積み荷が不正です' };
   const cap = maxLoad(convoy, state.scenario.carrierCapacity);
   if (load > cap + EPS) return { ok: false, error: `積載上限(${cap})を超えています` };
@@ -203,13 +226,67 @@ export function dispatch(state: SimState, convoyId: string, destId: string, load
   return { ok: true, route };
 }
 
-/** 撤退路(陣→蔵の最短経路) */
+/** 撤退路(プレイヤーが選んだ道。既定は陣→蔵の日数最短) */
 export function retreatRoute(state: SimState): Route {
-  return shortestRoute(state.scenario.map, state.scenario.frontId, state.scenario.depotId)!;
+  return routeFromNodes(state.scenario.map, state.army.retreatNodes)!;
+}
+
+/** 撤退路を選び直す。陣を保持している間だけ */
+export function setRetreatRoute(state: SimState, nodes: string[]): { ok: true } | { ok: false; error: string } {
+  const sc = state.scenario;
+  if (state.army.phase !== 'hold') return { ok: false, error: '撤退が始まった後は変えられません' };
+  const r = routeFromNodes(sc.map, nodes);
+  if (!r || nodes[0] !== sc.frontId || nodes[nodes.length - 1] !== sc.depotId) return { ok: false, error: '陣から蔵への道ではありません' };
+  state.army.retreatNodes = [...nodes];
+  return { ok: true };
+}
+
+export interface TripPreview {
+  route: Route;
+  /** 道中で食べる量 */
+  eat: number;
+  /** 危険が何も起きなければ届く量(負なら道中で食料が尽きる) */
+  arrive: number;
+  /** 危険がすべて起きた場合に届く量(負なら道中で食料が尽きる) */
+  arriveWorst: number;
+  risks: { a: string; b: string; risk: LinkRisk }[];
+}
+
+/** 出発前の見積もり。危険が起きない場合と、全部起きた場合の両方を出す */
+export function tripPreview(state: SimState, convoy: Convoy, nodes: string[], load: number): TripPreview | null {
+  const sc = state.scenario;
+  const route = routeFromNodes(sc.map, nodes);
+  if (!route) return null;
+  const perDay = convoy.carriers * sc.carrierRation;
+  let worst = load;
+  for (let i = 0; i + 1 < nodes.length; i++) {
+    const link = findLink(sc.map, nodes[i]!, nodes[i + 1]!)!;
+    worst -= perDay * link.days;
+    if (worst < -EPS) break;
+    if (link.risk) worst *= 1 - link.risk.loss;
+  }
+  const eat = eatenOver(convoy, sc.carrierRation, route.days);
+  return { route, eat, arrive: load - eat, arriveWorst: worst < -EPS ? worst : clean(Math.max(0, worst)), risks: routeRisks(sc.map, nodes) };
+}
+
+/**
+ * 区間 from→to を通り抜けたときの危険の判定。起きたら積み荷を減らし、失った量を返す。
+ * 乱数は state.rng から引くので、同じシード・同じ操作なら同じ結果になる。
+ */
+function applyRisk(state: SimState, from: string, to: string, holder: { cargo: number }, who: string): number {
+  const link = findLink(state.scenario.map, from, to);
+  if (!link?.risk || link.risk.chance <= 0) return 0;
+  if (state.rng.next() >= link.risk.chance) return 0;
+  const lost = holder.cargo * link.risk.loss;
+  holder.cargo = clean(holder.cargo - lost);
+  if (lost > 0) addLog(state, `${who}は${link.risk.label}で荷の${Math.round(link.risk.loss * 100)}%(米${r1(lost)})を失った`);
+  return lost;
 }
 
 export interface RetreatPlan {
   route: Route;
+  /** 撤退路の危険(見積もりには入れていない。起きれば足りなくなる) */
+  risks: { a: string; b: string; risk: LinkRisk }[];
   /** 撤退に必要な米の合計(今の兵数で) */
   need: number;
   /** 兵が持てる上限 */
@@ -249,7 +326,7 @@ export function retreatPlan(state: SimState): RetreatPlan {
     stops.push({ id, required, have: state.rice[id] ?? 0 });
     cargo = Math.max(cargo, target);
   }
-  return { route, need, capacity, fromFront, stops };
+  return { route, risks: routeRisks(sc.map, route.nodes), need, capacity, fromFront, stops };
 }
 
 /** 移動中の Move の、今の区間の始点から終点までの残り日数(区間の途中なら残り刻みで数える) */
@@ -319,9 +396,11 @@ function stepArmy(state: SimState): void {
     }
   }
 
+  const from = mv.route[mv.leg]!;
   const { reached, finished } = advance(sc, mv);
   if (!reached) return;
   a.at = reached;
+  applyRisk(state, from, reached, a, '軍勢');
   if (finished) {
     state.rice[reached] = (state.rice[reached] ?? 0) + a.cargo;
     addLog(state, `軍勢が${nodeName(state, reached)}に戻った(兵${a.troops}人・残りの米${r1(a.cargo)}を納めた)`);
@@ -356,8 +435,12 @@ export function step(state: SimState): void {
       continue;
     }
     convoy.cargo = clean(convoy.cargo - need);
+    const from = mv.route[mv.leg]!;
     const { reached, finished } = advance(sc, mv);
-    if (reached) convoy.at = reached;
+    if (reached) {
+      convoy.at = reached;
+      applyRisk(state, from, reached, convoy, convoy.name);
+    }
     if (finished) {
       state.rice[convoy.at] = (state.rice[convoy.at] ?? 0) + convoy.cargo;
       addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}に到着(米${r1(convoy.cargo)}を納めた)`);

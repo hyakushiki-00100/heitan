@@ -1,5 +1,6 @@
 import {
   armyDaysToHome,
+  candidateRoutes,
   createState,
   currentDay,
   daysLeft,
@@ -9,8 +10,9 @@ import {
   maxLoad,
   nodeConsumptionPerDay,
   retreatPlan,
-  shortestRoute,
+  setRetreatRoute,
   step,
+  tripPreview,
   type Scenario,
   type SimState,
 } from '@hyoro/core';
@@ -35,12 +37,24 @@ let last = performance.now();
 let selected: string | null = null;
 let dest: string | null = null;
 let load = 0;
+/** 選んでいる道の候補番号(candidateRoutes の何番目か) */
+let routeIdx = 0;
 let dispatchedOnce = false;
+let seed = 0;
+
+/** URL の ?seed= があればそれを使い、なければ遊ぶたびに変える */
+function pickSeed(): number {
+  const q = new URLSearchParams(location.search).get('seed');
+  const n = q === null ? NaN : Number(q);
+  if (Number.isInteger(n) && n >= 0) return n >>> 0;
+  return (Math.random() * 2 ** 32) >>> 0;
+}
 /** 指図パネルを作り直す必要があるかの判定用。同じなら作り直さない(スライダー操作を妨げないため) */
 let orderKey = '';
 
 function reset(): void {
-  state = createState(structuredClone(scenario));
+  seed = pickSeed();
+  state = createState(structuredClone(scenario), seed);
   running = false;
   acc = 0;
   selected = null;
@@ -72,16 +86,47 @@ function selectedConvoy() {
   return state.convoys.find((c) => c.id === selected && !c.dropped) ?? null;
 }
 
-function currentRoute() {
+function routeOptions() {
   const c = selectedConvoy();
-  if (!c || c.move || !dest) return null;
-  return shortestRoute(state.scenario.map, c.at, dest);
+  if (!c || c.move || !dest) return [];
+  return candidateRoutes(state.scenario.map, c.at, dest, 3);
+}
+
+function currentRoute() {
+  const opts = routeOptions();
+  return opts[Math.min(routeIdx, opts.length - 1)] ?? null;
+}
+
+/** 道の説明(経由地と危険) */
+function routeLabel(nodes: string[], days: number): string {
+  const mid = nodes.slice(1, -1).map(nodeName);
+  const via = mid.length ? `${mid.join('・')}経由` : '直行';
+  const risks = state.scenario.map.links.filter(
+    (l) => l.risk && nodes.some((n, i) => i + 1 < nodes.length && ((l.a === n && l.b === nodes[i + 1]) || (l.b === n && l.a === nodes[i + 1]))),
+  );
+  return `${via} ${fmt(days)}日${risks.length ? ' ⚠' + risks.map((l) => l.risk!.label).join('・') : ''}`;
+}
+
+/** 危険がすべて起きても届く(食料が尽きない)最小の積み荷。積める上限で足りなければ null */
+function safeLoad(nodes: string[], max: number): number | null {
+  const c = selectedConvoy()!;
+  const ok = (l: number) => (tripPreview(state, c, nodes, l)?.arriveWorst ?? -1) >= 0;
+  if (!ok(max)) return null;
+  let lo = 0;
+  let hi = max;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (ok(mid)) hi = mid;
+    else lo = mid;
+  }
+  return Math.ceil(hi * 2) / 2; // 0.5刻みに切り上げ
 }
 
 function setDest(id: string): void {
   const c = selectedConvoy();
   if (!c || c.move || id === c.at) return;
   dest = id;
+  routeIdx = 0;
   load = Math.min(maxLoad(c, state.scenario.carrierCapacity), state.rice[c.at] ?? 0);
   renderPanel();
   // スマホでは出発ボタンが画面外に出やすいので、見える位置までスクロールする
@@ -145,6 +190,7 @@ function renderClock(): void {
     html += '軍勢は散り散りになった';
   }
   $('clock').innerHTML = html;
+  $('seed').textContent = `シード ${seed}`;
 }
 
 function renderRetreat(): void {
@@ -159,9 +205,18 @@ function renderRetreat(): void {
     return;
   }
   const p = retreatPlan(state);
-  const via = p.route.nodes.map(nodeName).join(' → ');
+  const sc = state.scenario;
+  const opts = candidateRoutes(sc.map, sc.frontId, sc.depotId, 3);
+  const cur = p.route.nodes.join('>');
   const rows = [
-    `<div>撤退路: ${via}(${p.route.days}日)</div>`,
+    '<div>撤退路を選ぶ:</div><div class="dests">' +
+      opts
+        .map(
+          (r, i) =>
+            `<button type="button" data-retreat="${i}" class="${r.nodes.join('>') === cur ? 'selected' : ''}">${routeLabel(r.nodes, r.days)}</button>`,
+        )
+        .join('') +
+      '</div>',
     `<div>兵${a.troops}人 × ${a.ration} × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る。兵が持てるのは <b class="num">${fmt(p.capacity)}</b> まで</div>`,
     `<div>${nodeName(a.at)}から持ち出す: ${fmt(p.fromFront)}(撤退の日に陣に残っている分から)</div>`,
   ];
@@ -173,8 +228,19 @@ function renderRetreat(): void {
         `<span class="${ok ? 'good' : 'bad'}">(今 ${fmt(s.have)}${ok ? ' ✓' : ''})</span></div>`,
     );
   }
+  for (const r of p.risks) {
+    rows.push(
+      `<div class="bad">⚠ ${nodeName(r.a)}→${nodeName(r.b)}の${r.risk.label}: ${Math.round(r.risk.chance * 100)}%の確率で、持っている米の${Math.round(r.risk.loss * 100)}%を失う(この見積もりには入っていません)</div>`,
+    );
+  }
   rows.push('<div class="note">兵は要る分しか受け取りません。多く置いた米は残り、余剰として減点されます。</div>');
   box.innerHTML = rows.join('');
+  box.querySelectorAll<HTMLButtonElement>('[data-retreat]').forEach((b) => {
+    b.onclick = () => {
+      const r = opts[Number(b.dataset.retreat)];
+      if (r && setRetreatRoute(state, r.nodes).ok) renderPanel();
+    };
+  });
 }
 
 function renderHint(): void {
@@ -239,21 +305,33 @@ function renderPanel(): void {
   if (state.outcome !== 'playing') showResult();
 }
 
-function previewHtml(carriers: number, via: string, days: number, eat: number): string {
+function previewHtml(nodes: string[]): string {
   const sc = state.scenario;
-  const arrive = load - eat;
-  return (
-    `道: ${via}(${days}日)<br>` +
-    `人足${carriers}人 × ${sc.carrierRation} × ${days}日 = 道中で <b class="num">${fmt(eat)}</b> 食べる<br>` +
-    (arrive + EPS >= 0
-      ? `出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(Math.max(0, arrive))}</b>`
-      : `<span class="bad">道中で食料が尽き、人足が離脱します(積み荷も失われます)。</span>`)
-  );
+  const c = selectedConvoy()!;
+  const p = tripPreview(state, c, nodes, load)!;
+  const lines = [
+    `道: ${nodes.map(nodeName).join(' → ')}(${fmt(p.route.days)}日)`,
+    `人足${c.carriers}人 × ${sc.carrierRation} × ${fmt(p.route.days)}日 = 道中で <b class="num">${fmt(p.eat)}</b> 食べる`,
+  ];
+  if (p.arrive + EPS < 0) {
+    lines.push('<span class="bad">道中で食料が尽き、人足が離脱します(積み荷も失われます)。</span>');
+  } else if (!p.risks.length) {
+    lines.push(`出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(Math.max(0, p.arrive))}</b>`);
+  } else {
+    const r = p.risks.map((x) => `${x.risk.label}(${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う)`).join('・');
+    lines.push(`出発 <b class="num">${fmt(load)}</b> → 無事なら <b class="num">${fmt(Math.max(0, p.arrive))}</b>`);
+    lines.push(
+      p.arriveWorst + EPS >= 0
+        ? `<span class="warn">⚠ ${r}。起きれば到着 <b class="num">${fmt(p.arriveWorst)}</b></span>`
+        : `<span class="bad">⚠ ${r}。起きると道中で食料が尽き、人足が離脱します。</span>`,
+    );
+  }
+  return lines.join('<br>');
 }
 
 function currentOrderKey(): string {
   const c = selectedConvoy();
-  return [selected, dest, c?.at, !!c?.move, c ? state.rice[c.at] : '', state.outcome].join('|');
+  return [selected, dest, routeIdx, c?.at, !!c?.move, c ? state.rice[c.at] : '', state.outcome].join('|');
 }
 
 function renderOrder(): void {
@@ -279,24 +357,50 @@ function renderOrder(): void {
   parts.push('</div>');
 
   const route = currentRoute();
+  const opts = routeOptions();
+  let safe: number | null = null;
   if (route && dest) {
     const cap = maxLoad(c, sc.carrierCapacity);
     const have = state.rice[c.at] ?? 0;
     const max = Math.min(cap, have);
     load = Math.min(load, max);
     const eat = eatenOver(c, sc.carrierRation, route.days);
-    const via = route.nodes.map(nodeName).join(' → ');
+    // 危険が起きると「帰り分」では足りなくなる道だけ、備えの分を出す
+    // (危険が最後の区間にあるなら、荷を失っても食料は尽きないので要らない)
+    const risky = tripPreview(state, c, route.nodes, 0)!.risks.length > 0;
+    const safeNeed = risky ? safeLoad(route.nodes, cap) : null;
+    const needsBuffer = risky && (safeNeed === null || safeNeed > eat + EPS);
+    safe = needsBuffer && safeNeed !== null && safeNeed <= max + EPS ? safeNeed : null;
     parts.push(
+      '<div>道を選ぶ:</div><div class="dests">' +
+        opts
+          .map(
+            (r, i) =>
+              `<button type="button" data-route="${i}" class="${r === route ? 'selected' : ''}">${routeLabel(r.nodes, r.days)}</button>`,
+          )
+          .join('') +
+        '</div>',
       `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
       `<div class="row"><button type="button" id="load-full">満載(${fmt(max)})</button>` +
-        `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button></div>`,
-      `<div id="preview" class="preview">${previewHtml(c.carriers, via, route.days, eat)}</div>`,
+        `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button>` +
+        (needsBuffer
+          ? `<button type="button" id="load-safe" ${safe === null ? 'disabled' : ''}>荷を失っても尽きない分${safeNeed === null ? '' : `(${fmt(safeNeed)})`}</button>`
+          : '') +
+        '</div>',
+      `<div id="preview" class="preview">${previewHtml(route.nodes)}</div>`,
       `<button type="button" id="btn-go" class="primary">出発させる</button>`,
     );
   }
   body.innerHTML = parts.join('');
 
   body.querySelectorAll<HTMLButtonElement>('[data-dest]').forEach((b) => (b.onclick = () => setDest(b.dataset.dest!)));
+  body.querySelectorAll<HTMLButtonElement>('[data-route]').forEach(
+    (b) =>
+      (b.onclick = () => {
+        routeIdx = Number(b.dataset.route);
+        renderOrder();
+      }),
+  );
   if (!route || !dest) return;
   const eat = eatenOver(c, sc.carrierRation, route.days);
   const range = body.querySelector<HTMLInputElement>('#load');
@@ -305,7 +409,7 @@ function renderOrder(): void {
     range.oninput = () => {
       load = Number(range.value);
       $('load-val').textContent = fmt(load);
-      $('preview').innerHTML = previewHtml(c.carriers, route.nodes.map(nodeName).join(' → '), route.days, eat);
+      $('preview').innerHTML = previewHtml(route.nodes);
     };
   }
   $('load-full').onclick = () => {
@@ -316,9 +420,17 @@ function renderOrder(): void {
     load = eat;
     renderOrder();
   };
+  const safeBtn = body.querySelector<HTMLButtonElement>('#load-safe');
+  if (safeBtn && safe !== null) {
+    const v = safe;
+    safeBtn.onclick = () => {
+      load = v;
+      renderOrder();
+    };
+  }
   $('btn-go').onclick = () => {
     if (load + EPS < eat && !confirm('道中で食料が尽き、人足が離脱します。それでも出発させますか?')) return;
-    const r = dispatch(state, c.id, dest!, load);
+    const r = dispatch(state, c.id, dest!, load, route.nodes);
     if (!r.ok) {
       alert(r.error);
       return;

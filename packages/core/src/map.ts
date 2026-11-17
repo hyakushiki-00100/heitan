@@ -9,11 +9,23 @@ export interface MapNode {
   y: number;
 }
 
+/** 道の危険。通り抜けるたびに chance の確率で、積み荷の loss の割合を失う */
+export interface LinkRisk {
+  /** 画面とログに出す名前(例: 川越え) */
+  label: string;
+  /** 1回通るごとに起きる確率(0〜1) */
+  chance: number;
+  /** 起きたときに失う積み荷の割合(0〜1) */
+  loss: number;
+}
+
 export interface MapLink {
   a: string;
   b: string;
   /** 1人が歩いて何日かかるか */
   days: number;
+  /** 危険(省略は安全な道) */
+  risk?: LinkRisk;
 }
 
 export interface GameMap {
@@ -33,6 +45,12 @@ export function validateMap(map: GameMap): void {
     if (!ids.has(l.a) || !ids.has(l.b)) throw new Error(`存在しないノードへのリンク: ${l.a}-${l.b}`);
     if (l.a === l.b) throw new Error(`自己リンク: ${l.a}`);
     if (!(l.days > 0)) throw new Error(`日数は正の数: ${l.a}-${l.b}`);
+    if (l.risk) {
+      const r = l.risk;
+      if (!(r.chance >= 0 && r.chance <= 1)) throw new Error(`危険の確率は0〜1: ${l.a}-${l.b}`);
+      if (!(r.loss >= 0 && r.loss <= 1)) throw new Error(`危険で失う割合は0〜1: ${l.a}-${l.b}`);
+      if (!r.label) throw new Error(`危険に名前がない: ${l.a}-${l.b}`);
+    }
     const key = [l.a, l.b].sort().join('|');
     if (seen.has(key)) throw new Error(`リンクが重複: ${key}`);
     seen.add(key);

@@ -32,6 +32,8 @@ export function toScreen(v: View, n: { x: number; y: number }): { x: number; y: 
 }
 
 const NODE_R = 20;
+/** 待機中の印を拠点のまわりに置く角度(度。0=右、90=下) */
+const IDLE_ANGLES = [30, 90, 150, 210, 330, 0, 180, 60, 120];
 
 /** 画面座標にある拠点のID。無ければ null。 */
 export function hitNode(state: SimState, v: View, x: number, y: number): string | null {
@@ -80,7 +82,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const a = toScreen(v, byId.get(l.a)!);
     const b = toScreen(v, byId.get(l.b)!);
     const hot = onRoute.has([l.a, l.b].sort().join('|'));
-    ctx.strokeStyle = hot ? C.accent : C.line;
+    ctx.strokeStyle = hot ? C.accent : l.risk ? C.warn : C.line;
     ctx.lineWidth = hot ? 5 : 3;
     ctx.setLineDash(hot ? [] : [8, 5]);
     ctx.beginPath();
@@ -90,11 +92,11 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.setLineDash([]);
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
-    const label = `${l.days}日`;
+    const label = l.risk ? `${l.days}日 ⚠${l.risk.label}` : `${l.days}日`;
     const tw = ctx.measureText(label).width + 8;
     ctx.fillStyle = C.paper;
     ctx.fillRect(mx - tw / 2, my - 8, tw, 16);
-    ctx.fillStyle = hot ? C.accent : C.ink2;
+    ctx.fillStyle = hot ? C.accent : l.risk ? C.warn : C.ink2;
     ctx.fillText(label, mx, my);
   }
 
@@ -172,7 +174,8 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     if (!c.move) {
       const k = idleCount.get(c.at) ?? 0;
       idleCount.set(c.at, k + 1);
-      const ang = Math.PI * 0.25 + k * (Math.PI / 3);
+      // 拠点名は真上にあるので、上側(270度付近)を避けて並べる
+      const ang = (IDLE_ANGLES[k % IDLE_ANGLES.length]! * Math.PI) / 180;
       p = { x: p.x + Math.cos(ang) * (NODE_R + 12), y: p.y + Math.sin(ang) * (NODE_R + 12) };
     } else {
       p = avoidNodes(state, v, p);

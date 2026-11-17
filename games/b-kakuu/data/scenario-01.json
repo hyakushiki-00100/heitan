@@ -22,12 +22,12 @@
       { "a": "mura", "b": "kawa", "days": 1.5 },
       { "a": "mura", "b": "toge", "days": 2 },
       { "a": "toge", "b": "jin",  "days": 3 },
-      { "a": "kawa", "b": "jin",  "days": 3 }
+      { "a": "kawa", "b": "jin",  "days": 3, "risk": { "label": "川越え", "chance": 0.2, "loss": 0.3 } }
     ]
   },
   "nodes": {
     "kura": { "rice": 440 },
-    "jin":  { "rice": 90 }
+    "jin":  { "rice": 130 }
   },
   "army": { "troops": 24, "ration": 0.5, "capacityPer": 2 },
   "scoring": { "perPerson": 10, "perSurplus": 1 },
@@ -35,6 +35,7 @@
     { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
     { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" },
     { "id": "c3", "name": "三番荷駄", "carriers": 5, "at": "kura" },
-    { "id": "c4", "name": "四番荷駄", "carriers": 5, "at": "kura" }
+    { "id": "c4", "name": "四番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c5", "name": "五番荷駄", "carriers": 5, "at": "kura" }
   ]
 }

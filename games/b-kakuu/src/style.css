@@ -52,6 +52,7 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
 .row input[type=range] { flex: 1; }
 .preview { font-size: 14px; line-height: 1.6; background: #fffaf0; border: 1px solid var(--line); padding: 6px 8px; margin: 6px 0; }
 .preview .bad { color: var(--bad); font-weight: bold; }
+.preview .warn { color: var(--warn); }
 .preview .num { font-variant-numeric: tabular-nums; }
 .retreat { font-size: 13px; line-height: 1.7; }
 .retreat .num { font-variant-numeric: tabular-nums; }

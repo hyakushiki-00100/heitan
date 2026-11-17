@@ -41,6 +41,8 @@ export interface Army {
   at: string;
   cargo: number;
   move: Move | null;
+  /** 撤退路(陣→蔵のノード列)。保持中はプレイヤーが選び直せる */
+  retreatNodes: string[];
   /** hold=陣を保持 / retreat=撤退中 / home=蔵に戻った / gone=全員離脱 */
   phase: ArmyPhase;
   /** 離脱した兵の数 */

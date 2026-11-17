@@ -17,10 +17,15 @@ import {
 import raw from '../../../games/b-kakuu/data/scenario-01.json';
 
 const scenario = raw as unknown as Scenario;
-const fresh = (mutate?: (sc: Scenario) => void): SimState => {
+/**
+ * テスト用の初期状態。結果を決めて確かめたいので、既定では道の危険を外す。
+ * 危険を含めて試すときは withRisk=true にする。
+ */
+const fresh = (mutate?: (sc: Scenario) => void, withRisk = false, seed?: number): SimState => {
   const sc = structuredClone(scenario);
+  if (!withRisk) for (const l of sc.map.links) delete l.risk;
   mutate?.(sc);
-  return createState(sc);
+  return createState(sc, seed);
 };
 const run = (s: SimState, n: number) => {
   for (let i = 0; i < n; i++) step(s);
@@ -37,6 +42,10 @@ const playOut = (s: SimState, bot: (s: SimState) => void) => {
 
 // 前線の兵 24人 × 0.5 = 1日12 を食べる
 const FRONT_PER_DAY = 12;
+const JIN0 = scenario.nodes.jin!.rice; // 陣の初期の米
+const KURA0 = scenario.nodes.kura!.rice;
+const CARRIERS = scenario.convoys.reduce((n, c) => n + c.carriers, 0);
+const PEOPLE = scenario.army.troops + CARRIERS;
 const BACK = 12.5; // 運搬隊(5人)が陣から蔵へ戻る5日分
 
 describe('運ぶ人も食べる', () => {
@@ -44,12 +53,12 @@ describe('運ぶ人も食べる', () => {
     const s = fresh();
     const r = dispatch(s, 'c1', 'jin', 50);
     expect(r.ok).toBe(true);
-    expect(s.rice.kura).toBe(440 - 50);
+    expect(s.rice.kura).toBe(KURA0 - 50);
     run(s, 10);
     // 人足5人×0.5×5日 = 12.5 を食べる → 37.5 届く。陣は 5日間で 60 消費
     expect(s.convoys[0]!.move).toBeNull();
     expect(s.convoys[0]!.at).toBe('jin');
-    expect(s.rice.jin).toBeCloseTo(90 + 37.5 - 5 * FRONT_PER_DAY, 6);
+    expect(s.rice.jin).toBeCloseTo(JIN0 + 37.5 - 5 * FRONT_PER_DAY, 6);
   });
   it('遠いほど届く量が減る(近い村なら食べる量が少ない)', () => {
     const s = fresh();
@@ -82,13 +91,14 @@ describe('陣の保持', () => {
     expect(nodeConsumptionPerDay(s, 'jin')).toBe(FRONT_PER_DAY);
     expect(nodeConsumptionPerDay(s, 'kawa')).toBe(0);
     run(s, 2);
-    expect(s.rice.jin).toBe(90 - FRONT_PER_DAY);
+    expect(s.rice.jin).toBe(JIN0 - FRONT_PER_DAY);
   });
-  it('何もしなければ陣の兵糧が尽きて失敗(7.5日分あるので8日目)', () => {
+  it('何もしなければ陣の兵糧が尽きて失敗(初期の米が尽きた次の半日)', () => {
     const s = fresh();
     run(s, 100);
     expect(s.outcome).toBe('lost');
-    expect(currentDay(s)).toBe(8);
+    // 130 / 12 = 10.83日分 → 11日目の刻みで足りなくなる
+    expect(currentDay(s)).toBe(Math.floor(JIN0 / FRONT_PER_DAY / 0.5 + 1) * 0.5);
     expect(evaluate(s).held).toBe(false);
     expect(evaluate(s).score).toBe(0);
   });
@@ -187,10 +197,10 @@ describe('遠征の終わりと評価', () => {
     expect(s.outcome).toBe('done');
     const r = evaluate(s);
     const leftAtJin = 1000 - 20 * FRONT_PER_DAY - 48;
-    expect(r).toMatchObject({ held: true, troopsHome: 24, troopsTotal: 24, carriersHome: 20, carriersTotal: 20 });
+    expect(r).toMatchObject({ held: true, troopsHome: 24, troopsTotal: 24, carriersHome: CARRIERS, carriersTotal: CARRIERS });
     expect(r.surplus).toBe(leftAtJin);
     expect(r.surplusByNode).toEqual([{ id: 'jin', rice: leftAtJin }]);
-    expect(r.score).toBe(44 * 10 - leftAtJin);
+    expect(r.score).toBe(PEOPLE * 10 - leftAtJin);
   });
   it('陣に置き去りにした運搬隊は帰還に数えない', () => {
     const s = fresh((sc) => {
@@ -200,7 +210,7 @@ describe('遠征の終わりと評価', () => {
     });
     run(s, 60);
     expect(s.outcome).toBe('done');
-    expect(evaluate(s).carriersHome).toBe(15);
+    expect(evaluate(s).carriersHome).toBe(CARRIERS - 5);
   });
 });
 
@@ -244,7 +254,7 @@ describe('シナリオ01の難しさ(自動プレイで確認)', () => {
   it('備える手なら全員が帰る', () => {
     const s = playOut(fresh(), prepared(0));
     const r = evaluate(s);
-    expect(r).toMatchObject({ troopsHome: 24, carriersHome: 20 });
+    expect(r).toMatchObject({ troopsHome: 24, carriersHome: CARRIERS });
     expect(r.score).toBeGreaterThan(evaluate(playOut(fresh(), naive)).score);
   });
   it('河原に置きすぎると余剰が増え、得点が下がる', () => {
