@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>兵糧奉行(試作)</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <header>
+    <h1>兵糧奉行 <small>試作 0.1</small></h1>
+    <div id="clock"></div>
+    <div class="controls">
+      <button id="btn-play" type="button">▶ 進める</button>
+      <button id="btn-speed" type="button">×1</button>
+      <label class="check"><input id="chk-autopause" type="checkbox" checked /> 到着で止める</label>
+    </div>
+  </header>
+  <main>
+    <div id="map-wrap"><canvas id="map"></canvas></div>
+    <aside id="panel">
+      <p id="hint" class="hint"></p>
+      <section>
+        <h2>運搬隊</h2>
+        <div id="convoys"></div>
+      </section>
+      <section id="order" hidden>
+        <h2>指図</h2>
+        <div id="order-body"></div>
+      </section>
+      <section>
+        <h2>報告</h2>
+        <ol id="log"></ol>
+      </section>
+    </aside>
+  </main>
+  <div id="result" hidden>
+    <div class="result-box">
+      <p id="result-text"></p>
+      <button id="btn-retry" type="button">もう一度</button>
+    </div>
+  </div>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>
