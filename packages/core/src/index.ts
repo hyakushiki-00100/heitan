@@ -4,3 +4,4 @@ export * from './route';
 export * from './stock';
 export * from './unit';
 export * from './sim';
+export * from './score';

@@ -1,11 +1,14 @@
 import {
+  armyDaysToHome,
   createState,
   currentDay,
   daysLeft,
-  dailyConsumption,
   dispatch,
   eatenOver,
+  evaluate,
   maxLoad,
+  nodeConsumptionPerDay,
+  retreatPlan,
   shortestRoute,
   step,
   type Scenario,
@@ -18,6 +21,7 @@ const scenario = scenarioJson as unknown as Scenario;
 /** 1刻み(半日)を何ミリ秒で進めるか(×1のとき) */
 const STEP_MS = 1200;
 const SPEEDS = [1, 2, 4];
+const EPS = 1e-9;
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('map');
@@ -42,6 +46,7 @@ function reset(): void {
   selected = null;
   dest = null;
   dispatchedOnce = false;
+  orderKey = '';
   $('result').hidden = true;
   renderPanel();
 }
@@ -64,7 +69,7 @@ function nodeName(id: string): string {
 }
 
 function selectedConvoy() {
-  return state.convoys.find((c) => c.id === selected) ?? null;
+  return state.convoys.find((c) => c.id === selected && !c.dropped) ?? null;
 }
 
 function currentRoute() {
@@ -93,9 +98,13 @@ function tick(now: number): void {
     while (acc >= interval && running) {
       acc -= interval;
       const movingBefore = new Set(state.convoys.filter((c) => c.move).map((c) => c.id));
+      const phaseBefore = state.army.phase;
+      const troopsBefore = state.army.troops;
       step(state);
+      // 指図が要りそうな出来事があったら止める
       const arrived = state.convoys.some((c) => movingBefore.has(c.id) && !c.move);
-      if (arrived && $<HTMLInputElement>('chk-autopause').checked) {
+      const armyEvent = state.army.phase !== phaseBefore || state.army.troops !== troopsBefore;
+      if ((arrived || armyEvent) && $<HTMLInputElement>('chk-autopause').checked) {
         running = false;
         acc = 0;
       }
@@ -103,30 +112,98 @@ function tick(now: number): void {
       renderPanel();
     }
   }
-  const alpha = running ? Math.min(1, acc / interval) : 0;
+  // 一時停止中も acc を保つので、止めた位置のまま描ける
+  const alpha = state.outcome === 'playing' ? Math.min(1, acc / interval) : 0;
   const r = currentRoute();
-  draw(ctx, state, view(), alpha, { selectedConvoyId: selected, routeNodes: r?.nodes ?? null });
+  const holding = state.army.phase === 'hold';
+  const plan = holding ? retreatPlan(state) : null;
+  draw(ctx, state, view(), alpha, {
+    selectedConvoyId: selected,
+    routeNodes: r?.nodes ?? null,
+    retreatNodes: plan?.route.nodes ?? null,
+    stops: plan?.stops ?? [],
+  });
   requestAnimationFrame(tick);
 }
 
 // ---- パネル ----
-function renderPanel(): void {
+function renderClock(): void {
   const sc = state.scenario;
   const day = currentDay(state);
-  const front = sc.frontId;
-  const left = daysLeft(state.rice[front] ?? 0, dailyConsumption(sc, front));
-  $('clock').innerHTML =
-    `第 <b>${fmt(day)}</b> 日 / 目標 ${sc.goalDays}日 ・ ${nodeName(front)} ` +
-    `<b style="color:${daysLeftColor(left ?? 99)}">あと${(left ?? 0).toFixed(1)}日</b>`;
+  const a = state.army;
+  let html = `第 <b>${fmt(day)}</b> 日 ・ `;
+  if (a.phase === 'hold') {
+    const left = daysLeft(state.rice[a.at] ?? 0, nodeConsumptionPerDay(state, a.at)) ?? 0;
+    html +=
+      `撤退開始まで ${fmt(Math.max(0, sc.goalDays - day))}日 ・ ${nodeName(a.at)} ` +
+      `<b style="color:${daysLeftColor(left)}">あと${left.toFixed(1)}日分</b>`;
+  } else if (a.phase === 'retreat') {
+    html += `<b>撤退中</b> 兵${a.troops}人・米${fmt(a.cargo)} ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
+  } else if (a.phase === 'home') {
+    html += `軍勢は蔵に戻った(兵${a.troops}人)`;
+  } else {
+    html += '軍勢は散り散りになった';
+  }
+  $('clock').innerHTML = html;
+}
+
+function renderRetreat(): void {
+  const a = state.army;
+  const box = $('retreat');
+  if (a.phase !== 'hold') {
+    const lost = a.dropped > 0 ? `<br><span class="bad">離脱した兵: ${a.dropped}人</span>` : '';
+    box.innerHTML =
+      a.phase === 'retreat'
+        ? `兵${a.troops}人が蔵へ撤退中。持っている米 ${fmt(a.cargo)}。${lost}`
+        : `兵${a.troops}/${a.troopsTotal}人が帰還。${lost}`;
+    return;
+  }
+  const p = retreatPlan(state);
+  const via = p.route.nodes.map(nodeName).join(' → ');
+  const rows = [
+    `<div>撤退路: ${via}(${p.route.days}日)</div>`,
+    `<div>兵${a.troops}人 × ${a.ration} × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る。兵が持てるのは <b class="num">${fmt(p.capacity)}</b> まで</div>`,
+    `<div>${nodeName(a.at)}から持ち出す: ${fmt(p.fromFront)}(撤退の日に陣に残っている分から)</div>`,
+  ];
+  for (const s of p.stops) {
+    if (s.required <= 0) continue;
+    const ok = s.have + EPS >= s.required;
+    rows.push(
+      `<div>${nodeName(s.id)}に置いておく: <b class="num">${fmt(s.required)}</b> ` +
+        `<span class="${ok ? 'good' : 'bad'}">(今 ${fmt(s.have)}${ok ? ' ✓' : ''})</span></div>`,
+    );
+  }
+  rows.push('<div class="note">兵は要る分しか受け取りません。多く置いた米は残り、余剰として減点されます。</div>');
+  box.innerHTML = rows.join('');
+}
+
+function renderHint(): void {
+  const a = state.army;
+  const day = currentDay(state);
+  const goal = state.scenario.goalDays;
+  let hint: string;
+  if (!dispatchedOnce) {
+    hint =
+      '運搬隊を選び、行き先に<b>前線の陣</b>を選んで出発させてください。<br>人足も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>';
+  } else if (a.phase === 'retreat') {
+    hint = '撤退中です。蔵の外に残った運搬隊は<b>帰還に数えません</b>。帰りの米を持たせて蔵へ戻してください。';
+  } else if (a.phase === 'hold' && day >= goal - 6) {
+    hint = `${fmt(goal)}日目に撤退が始まります。<b>撤退路の拠点に米を置き</b>、陣にいる運搬隊は早めに蔵へ戻してください。`;
+  } else if (!running && state.convoys.some((c) => c.move)) {
+    hint = '▶ で時を進めます。';
+  } else {
+    hint = '陣に着いた隊は、帰り道の分の米を持たせないと戻れません。';
+  }
+  $('hint').innerHTML = hint;
+}
+
+function renderPanel(): void {
+  renderClock();
   $('btn-play').textContent = running ? '❚❚ 止める' : '▶ 進める';
   ($('btn-play') as HTMLButtonElement).disabled = state.outcome !== 'playing';
   $('btn-speed').textContent = `×${SPEEDS[speedIdx]}`;
-
-  $('hint').innerHTML = !dispatchedOnce
-    ? '運搬隊を選び、行き先に<b>前線の陣</b>を選んで出発させてください。<br>人足も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>'
-    : !running && state.convoys.some((c) => c.move)
-      ? '▶ で時を進めます。'
-      : '陣に着いた隊は、帰り道の分の米を持たせないと戻れません。';
+  renderHint();
+  renderRetreat();
 
   const box = $('convoys');
   box.innerHTML = '';
@@ -134,7 +211,12 @@ function renderPanel(): void {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'convoy' + (c.id === selected ? ' selected' : '');
-    const where = c.move ? `${nodeName(c.move.route[c.move.route.length - 1]!)}へ移動中・米${fmt(c.cargo)}` : `${nodeName(c.at)}で待機`;
+    b.disabled = c.dropped;
+    const where = c.dropped
+      ? '離脱'
+      : c.move
+        ? `${nodeName(c.move.route[c.move.route.length - 1]!)}へ移動中・米${fmt(c.cargo)}`
+        : `${nodeName(c.at)}で待機`;
     b.innerHTML = `<span>${i + 1}. ${c.name}(人足${c.carriers})</span><span class="st">${where}</span>`;
     b.onclick = () => {
       selected = c.id === selected ? null : c.id;
@@ -148,9 +230,9 @@ function renderPanel(): void {
 
   const log = $('log');
   log.innerHTML = '';
-  for (const e of [...state.log].reverse().slice(0, 30)) {
+  for (const e of [...state.log].reverse().slice(0, 40)) {
     const li = document.createElement('li');
-    li.textContent = `${fmt(e.step * sc.stepDays)}日 ${e.text}`;
+    li.textContent = `${fmt(e.step * state.scenario.stepDays)}日 ${e.text}`;
     log.appendChild(li);
   }
 
@@ -163,9 +245,9 @@ function previewHtml(carriers: number, via: string, days: number, eat: number): 
   return (
     `道: ${via}(${days}日)<br>` +
     `人足${carriers}人 × ${sc.carrierRation} × ${days}日 = 道中で <b class="num">${fmt(eat)}</b> 食べる<br>` +
-    (arrive >= 0
-      ? `出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(arrive)}</b>`
-      : `<span class="bad">道中で食料が尽きます。引き返し、積み荷は失われます。</span>`)
+    (arrive + EPS >= 0
+      ? `出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(Math.max(0, arrive))}</b>`
+      : `<span class="bad">道中で食料が尽き、人足が離脱します(積み荷も失われます)。</span>`)
   );
 }
 
@@ -207,7 +289,7 @@ function renderOrder(): void {
     parts.push(
       `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
       `<div class="row"><button type="button" id="load-full">満載(${fmt(max)})</button>` +
-        `<button type="button" id="load-back" ${eat > max ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button></div>`,
+        `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button></div>`,
       `<div id="preview" class="preview">${previewHtml(c.carriers, via, route.days, eat)}</div>`,
       `<button type="button" id="btn-go" class="primary">出発させる</button>`,
     );
@@ -215,54 +297,66 @@ function renderOrder(): void {
   body.innerHTML = parts.join('');
 
   body.querySelectorAll<HTMLButtonElement>('[data-dest]').forEach((b) => (b.onclick = () => setDest(b.dataset.dest!)));
+  if (!route || !dest) return;
+  const eat = eatenOver(c, sc.carrierRation, route.days);
   const range = body.querySelector<HTMLInputElement>('#load');
-  if (range && route) {
+  if (range) {
     // 要素を作り直さず、数字と予告だけ書き換える(作り直すとドラッグが途切れる)
     range.oninput = () => {
       load = Number(range.value);
       $('load-val').textContent = fmt(load);
-      $('preview').innerHTML = previewHtml(
-        c.carriers,
-        route.nodes.map(nodeName).join(' → '),
-        route.days,
-        eatenOver(c, sc.carrierRation, route.days),
-      );
+      $('preview').innerHTML = previewHtml(c.carriers, route.nodes.map(nodeName).join(' → '), route.days, eat);
     };
   }
-  const full = body.querySelector<HTMLButtonElement>('#load-full');
-  if (full && route) full.onclick = () => ((load = Math.min(maxLoad(c, sc.carrierCapacity), state.rice[c.at] ?? 0)), renderOrder());
-  const back = body.querySelector<HTMLButtonElement>('#load-back');
-  if (back && route) back.onclick = () => ((load = eatenOver(c, sc.carrierRation, route.days)), renderOrder());
-  const go = body.querySelector<HTMLButtonElement>('#btn-go');
-  if (go && dest) {
-    go.onclick = () => {
-      const r = dispatch(state, c.id, dest!, load);
-      if (!r.ok) {
-        alert(r.error);
-        return;
-      }
-      dispatchedOnce = true;
-      selected = null;
-      dest = null;
-      renderPanel();
-    };
-  }
+  $('load-full').onclick = () => {
+    load = Math.min(maxLoad(c, sc.carrierCapacity), state.rice[c.at] ?? 0);
+    renderOrder();
+  };
+  $('load-back').onclick = () => {
+    load = eat;
+    renderOrder();
+  };
+  $('btn-go').onclick = () => {
+    if (load + EPS < eat && !confirm('道中で食料が尽き、人足が離脱します。それでも出発させますか?')) return;
+    const r = dispatch(state, c.id, dest!, load);
+    if (!r.ok) {
+      alert(r.error);
+      return;
+    }
+    dispatchedOnce = true;
+    selected = null;
+    dest = null;
+    renderPanel();
+  };
 }
 
 function showResult(): void {
   const sc = state.scenario;
-  const won = state.outcome === 'won';
-  const delivered = state.rice[sc.frontId] ?? 0;
-  $('result-text').textContent = won
-    ? `${sc.goalDays}日間、${nodeName(sc.frontId)}を保ちました。\n蔵に残った米: ${fmt(state.rice[sc.depotId] ?? 0)}\n陣に残った米: ${fmt(delivered)}`
-    : `第${fmt(currentDay(state))}日、${nodeName(sc.frontId)}の兵糧が尽きました。\n遠征は失敗です。`;
+  const r = evaluate(state);
+  const scoring = sc.scoring ?? { perPerson: 10, perSurplus: 1 };
+  let text: string;
+  if (!r.held) {
+    text = `第${fmt(currentDay(state))}日、${nodeName(sc.frontId)}の兵糧が尽きました。\n遠征は失敗です。`;
+  } else {
+    const where = r.surplusByNode.map((x) => `${nodeName(x.id)} ${fmt(x.rice)}`).join('、');
+    text = [
+      `${sc.goalDays}日間${nodeName(sc.frontId)}を保ち、撤退しました。`,
+      '',
+      `帰還: 兵 ${r.troopsHome}/${r.troopsTotal}人 ・ 人足 ${r.carriersHome}/${r.carriersTotal}人`,
+      `  → +${(r.troopsHome + r.carriersHome) * scoring.perPerson}点(1人${scoring.perPerson}点)`,
+      `余剰(蔵の外に残した米): ${fmt(r.surplus)}${where ? `(${where})` : ''}`,
+      `  → −${fmt(r.surplus * scoring.perSurplus)}点(村への負担)`,
+      '',
+      `得点 ${fmt(r.score)} / 満点 ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
+    ].join('\n');
+  }
+  $('result-text').textContent = text;
   $('result').hidden = false;
 }
 
 // ---- 入力 ----
 $('btn-play').onclick = () => {
   running = !running;
-  acc = 0;
   renderPanel();
 };
 $('btn-speed').onclick = () => {
@@ -280,7 +374,7 @@ canvas.addEventListener('click', (e) => {
     return;
   }
   // 隊を選んでいなければ、その拠点で待機中の最初の隊を選ぶ
-  const idle = state.convoys.find((x) => !x.move && x.at === id);
+  const idle = state.convoys.find((x) => !x.move && !x.dropped && x.at === id);
   if (idle) {
     selected = idle.id;
     dest = null;

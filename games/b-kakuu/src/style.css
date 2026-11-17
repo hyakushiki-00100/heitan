@@ -53,6 +53,12 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
 .preview { font-size: 14px; line-height: 1.6; background: #fffaf0; border: 1px solid var(--line); padding: 6px 8px; margin: 6px 0; }
 .preview .bad { color: var(--bad); font-weight: bold; }
 .preview .num { font-variant-numeric: tabular-nums; }
+.retreat { font-size: 13px; line-height: 1.7; }
+.retreat .num { font-variant-numeric: tabular-nums; }
+.retreat .good { color: var(--ok); font-weight: bold; }
+.retreat .bad, .bad { color: var(--bad); font-weight: bold; }
+.retreat .note { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+#result-text { text-align: left; }
 #log { font-size: 12px; padding-left: 1.4em; margin: 0; color: var(--ink-2); max-height: 220px; overflow-y: auto; }
 #log li:first-child { color: var(--ink); }
 #result {

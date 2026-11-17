@@ -1,6 +1,6 @@
 {
   "id": "b-01",
-  "title": "第一の遠征 ― 峠の陣",
+  "title": "第一の遠征 ― 陣を保ち、帰る",
   "stepDays": 0.5,
   "carrierCapacity": 10,
   "carrierRation": 0.5,
@@ -10,25 +10,27 @@
   "frontId": "jin",
   "map": {
     "nodes": [
-      { "id": "kura",  "name": "蔵",     "kind": "depot",   "x": 10, "y": 70 },
-      { "id": "mura",  "name": "里の村", "kind": "village", "x": 32, "y": 45 },
-      { "id": "kawa",  "name": "河原",   "kind": "camp",    "x": 45, "y": 82 },
-      { "id": "toge",  "name": "峠",     "kind": "pass",    "x": 62, "y": 30 },
-      { "id": "jin",   "name": "前線の陣", "kind": "front", "x": 88, "y": 58 }
+      { "id": "kura",  "name": "蔵",       "kind": "depot",   "x": 10, "y": 70 },
+      { "id": "mura",  "name": "里の村",   "kind": "village", "x": 32, "y": 45 },
+      { "id": "kawa",  "name": "河原",     "kind": "camp",    "x": 45, "y": 82 },
+      { "id": "toge",  "name": "峠",       "kind": "pass",    "x": 62, "y": 30 },
+      { "id": "jin",   "name": "前線の陣", "kind": "front",   "x": 88, "y": 58 }
     ],
     "links": [
       { "a": "kura", "b": "mura", "days": 1 },
       { "a": "kura", "b": "kawa", "days": 2 },
-      { "a": "mura", "b": "kawa", "days": 1 },
+      { "a": "mura", "b": "kawa", "days": 1.5 },
       { "a": "mura", "b": "toge", "days": 2 },
       { "a": "toge", "b": "jin",  "days": 3 },
       { "a": "kawa", "b": "jin",  "days": 3 }
     ]
   },
   "nodes": {
-    "kura": { "rice": 400 },
-    "jin":  { "rice": 90, "consumptionPerDay": 12 }
+    "kura": { "rice": 440 },
+    "jin":  { "rice": 90 }
   },
+  "army": { "troops": 24, "ration": 0.5, "capacityPer": 2 },
+  "scoring": { "perPerson": 10, "perSurplus": 1 },
   "convoys": [
     { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
     { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" },

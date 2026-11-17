@@ -1,4 +1,4 @@
-import { convoyPosition, daysLeft, dailyConsumption, type MapNode, type SimState } from '@hyoro/core';
+import { armyPosition, convoyPosition, daysLeft, nodeConsumptionPerDay, type MapNode, type SimState } from '@hyoro/core';
 
 const C = {
   paper: '#f4efe4',
@@ -21,6 +21,10 @@ export interface View {
 export interface Highlight {
   selectedConvoyId: string | null;
   routeNodes: string[] | null;
+  /** 撤退路(保持中だけ表示) */
+  retreatNodes: string[] | null;
+  /** 撤退路の途中の拠点に置いておくべき米 */
+  stops: { id: string; required: number; have: number }[];
 }
 
 export function toScreen(v: View, n: { x: number; y: number }): { x: number; y: number } {
@@ -42,6 +46,20 @@ export function daysLeftColor(d: number): string {
   if (d < 2) return C.bad;
   if (d < 5) return C.warn;
   return C.ok;
+}
+
+/** 移動中の印が拠点の丸や文字に重ならないよう、近すぎる場合は丸の外へ押し出す */
+function avoidNodes(state: SimState, v: View, p: { x: number; y: number }, min = NODE_R + 14): { x: number; y: number } {
+  for (const n of state.scenario.map.nodes) {
+    const c = toScreen(v, n);
+    const dx = p.x - c.x;
+    const dy = p.y - c.y;
+    const d = Math.hypot(dx, dy);
+    if (d >= min) continue;
+    if (d < 0.5) return { x: c.x + min, y: c.y };
+    return { x: c.x + (dx / d) * min, y: c.y + (dy / d) * min };
+  }
+  return p;
 }
 
 export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, alpha: number, hl: Highlight): void {
@@ -80,6 +98,23 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.fillText(label, mx, my);
   }
 
+  // 撤退路(保持中は薄く示す)
+  if (hl.retreatNodes) {
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = C.bad;
+    ctx.lineWidth = 12;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    hl.retreatNodes.forEach((id, i) => {
+      const p = toScreen(v, byId.get(id)!);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // 拠点
   for (const n of sc.map.nodes) {
     const p = toScreen(v, n);
@@ -98,17 +133,41 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const rice = state.rice[n.id] ?? 0;
     ctx.font = '12px serif';
     ctx.fillText(`米${fmt(rice)}`, p.x, p.y);
-    const left = daysLeft(rice, dailyConsumption(sc, n.id));
+    const left = daysLeft(rice, nodeConsumptionPerDay(state, n.id));
     if (left !== null) {
       ctx.font = 'bold 13px serif';
       ctx.fillStyle = daysLeftColor(left);
       ctx.fillText(`あと${left.toFixed(1)}日`, p.x, p.y + NODE_R + 12);
     }
+    const stop = hl.stops.find((x) => x.id === n.id);
+    if (stop && stop.required > 0) {
+      const ok = stop.have + 1e-9 >= stop.required;
+      ctx.font = 'bold 12px serif';
+      ctx.fillStyle = ok ? C.ok : C.bad;
+      ctx.fillText(`撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, p.y + NODE_R + 12);
+    }
+  }
+
+  // 軍勢
+  const a = state.army;
+  if (a.phase !== 'gone') {
+    let p = toScreen(v, armyPosition(state, alpha));
+    const label = a.move ? `兵${a.troops} 米${fmt(a.cargo)}` : `兵${a.troops}`;
+    ctx.font = 'bold 12px serif';
+    const w = ctx.measureText(label).width + 12;
+    // 札は横長なので、半分の幅ぶん余分に離す
+    if (!a.move) p = { x: p.x - NODE_R - 4 - w / 2, y: p.y - 4 };
+    else p = avoidNodes(state, v, p, NODE_R + 6 + w / 2);
+    ctx.fillStyle = C.bad;
+    ctx.fillRect(p.x - w / 2, p.y - 10, w, 20);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, p.x, p.y + 0.5);
   }
 
   // 運搬隊
   const idleCount = new Map<string, number>();
   state.convoys.forEach((c, i) => {
+    if (c.dropped) return;
     let p = toScreen(v, convoyPosition(state, c, alpha));
     if (!c.move) {
       const k = idleCount.get(c.at) ?? 0;
@@ -116,6 +175,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
       const ang = Math.PI * 0.25 + k * (Math.PI / 3);
       p = { x: p.x + Math.cos(ang) * (NODE_R + 12), y: p.y + Math.sin(ang) * (NODE_R + 12) };
     } else {
+      p = avoidNodes(state, v, p);
       // 同じ場所を進む隊は重ならないよう縦にずらす
       const key = `${Math.round(p.x / 8)},${Math.round(p.y / 8)}`;
       const k = idleCount.get(key) ?? 0;
