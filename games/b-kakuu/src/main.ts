@@ -32,6 +32,8 @@ let selected: string | null = null;
 let dest: string | null = null;
 let load = 0;
 let dispatchedOnce = false;
+/** 指図パネルを作り直す必要があるかの判定用。同じなら作り直さない(スライダー操作を妨げないため) */
+let orderKey = '';
 
 function reset(): void {
   state = createState(structuredClone(scenario));
@@ -77,6 +79,8 @@ function setDest(id: string): void {
   dest = id;
   load = Math.min(maxLoad(c, state.scenario.carrierCapacity), state.rice[c.at] ?? 0);
   renderPanel();
+  // スマホでは出発ボタンが画面外に出やすいので、見える位置までスクロールする
+  document.getElementById('btn-go')?.scrollIntoView({ block: 'nearest' });
 }
 
 // ---- 進行 ----
@@ -140,7 +144,7 @@ function renderPanel(): void {
     box.appendChild(b);
   });
 
-  renderOrder();
+  if (currentOrderKey() !== orderKey) renderOrder();
 
   const log = $('log');
   log.innerHTML = '';
@@ -153,7 +157,25 @@ function renderPanel(): void {
   if (state.outcome !== 'playing') showResult();
 }
 
+function previewHtml(carriers: number, via: string, days: number, eat: number): string {
+  const sc = state.scenario;
+  const arrive = load - eat;
+  return (
+    `道: ${via}(${days}日)<br>` +
+    `人足${carriers}人 × ${sc.carrierRation} × ${days}日 = 道中で <b class="num">${fmt(eat)}</b> 食べる<br>` +
+    (arrive >= 0
+      ? `出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(arrive)}</b>`
+      : `<span class="bad">道中で食料が尽きます。引き返し、積み荷は失われます。</span>`)
+  );
+}
+
+function currentOrderKey(): string {
+  const c = selectedConvoy();
+  return [selected, dest, c?.at, !!c?.move, c ? state.rice[c.at] : '', state.outcome].join('|');
+}
+
 function renderOrder(): void {
+  orderKey = currentOrderKey();
   const sec = $('order');
   const body = $('order-body');
   const c = selectedConvoy();
@@ -181,18 +203,12 @@ function renderOrder(): void {
     const max = Math.min(cap, have);
     load = Math.min(load, max);
     const eat = eatenOver(c, sc.carrierRation, route.days);
-    const arrive = load - eat;
     const via = route.nodes.map(nodeName).join(' → ');
     parts.push(
-      `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b class="num">${fmt(load)}</b></div>`,
+      `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
       `<div class="row"><button type="button" id="load-full">満載(${fmt(max)})</button>` +
         `<button type="button" id="load-back" ${eat > max ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button></div>`,
-      `<div class="preview">道: ${via}(${route.days}日)<br>` +
-        `人足${c.carriers}人 × ${sc.carrierRation} × ${route.days}日 = 道中で <b class="num">${fmt(eat)}</b> 食べる<br>` +
-        (arrive >= 0
-          ? `出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(arrive)}</b>`
-          : `<span class="bad">道中で食料が尽きます。引き返し、積み荷は失われます。</span>`) +
-        `</div>`,
+      `<div id="preview" class="preview">${previewHtml(c.carriers, via, route.days, eat)}</div>`,
       `<button type="button" id="btn-go" class="primary">出発させる</button>`,
     );
   }
@@ -200,11 +216,17 @@ function renderOrder(): void {
 
   body.querySelectorAll<HTMLButtonElement>('[data-dest]').forEach((b) => (b.onclick = () => setDest(b.dataset.dest!)));
   const range = body.querySelector<HTMLInputElement>('#load');
-  if (range) {
+  if (range && route) {
+    // 要素を作り直さず、数字と予告だけ書き換える(作り直すとドラッグが途切れる)
     range.oninput = () => {
       load = Number(range.value);
-      renderOrder();
-      body.querySelector<HTMLInputElement>('#load')?.focus();
+      $('load-val').textContent = fmt(load);
+      $('preview').innerHTML = previewHtml(
+        c.carriers,
+        route.nodes.map(nodeName).join(' → '),
+        route.days,
+        eatenOver(c, sc.carrierRation, route.days),
+      );
     };
   }
   const full = body.querySelector<HTMLButtonElement>('#load-full');

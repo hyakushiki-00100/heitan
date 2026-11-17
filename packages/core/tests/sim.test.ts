@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createState, currentDay, daysLeft, dispatch, step, type Scenario, type SimState } from '../src';
+import { createState, currentDay, daysLeft, dispatch, eatenOver, shortestRoute, step, type Scenario, type SimState } from '../src';
 import raw from '../../../games/b-kakuu/data/scenario-01.json';
 
 const scenario = raw as unknown as Scenario;
@@ -104,5 +104,52 @@ describe('シナリオ01の難しさ', () => {
     for (const c of s.convoys) dispatch(s, c.id, 'jin', 12);
     run(s, 10);
     expect(s.convoys.every((c) => c.at !== 'jin')).toBe(true);
+  });
+});
+
+describe('検証で見つかった問題の回帰テスト', () => {
+  it('帰り分ちょうどを積めば、食事量・人数・行き先によらず浮動小数の誤差で尽きない', () => {
+    const bad: string[] = [];
+    for (const r of [0.1, 0.2, 0.3, 0.35, 0.6, 0.7, 1.1, 1.3]) {
+      for (const n of [3, 5, 7]) {
+        for (const d of ['mura', 'kawa', 'toge', 'jin']) {
+          const sc = structuredClone(scenario);
+          sc.carrierRation = r;
+          sc.carrierCapacity = 100;
+          sc.convoys[0]!.carriers = n;
+          const s = createState(sc);
+          const c = s.convoys[0]!;
+          const route = shortestRoute(sc.map, c.at, d)!;
+          dispatch(s, c.id, d, eatenOver(c, r, route.days));
+          for (let i = 0; i < 40 && c.move; i++) step(s);
+          if (c.at !== d) bad.push(`ration=${r} n=${n} to=${d}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+  });
+  it('道の日数が刻みの倍数でないシナリオは拒否する(画面の予告と実際の消費がずれるため)', () => {
+    const sc = structuredClone(scenario);
+    sc.map.links[0] = { ...sc.map.links[0]!, days: 1.2 };
+    expect(() => createState(sc)).toThrow(/倍数/);
+  });
+  it('シナリオの参照切れ・不正値を拒否する', () => {
+    const cases: ((sc: Scenario) => void)[] = [
+      (sc) => (sc.convoys[0]!.at = 'nowhere'),
+      (sc) => (sc.frontId = 'nowhere'),
+      (sc) => (sc.depotId = 'nowhere'),
+      (sc) => (sc.nodes['nowhere'] = { rice: 1 }),
+      (sc) => (sc.convoys[1]!.id = sc.convoys[0]!.id),
+      (sc) => (sc.convoys[0]!.carriers = 0),
+      (sc) => (sc.stepDays = 0),
+    ];
+    for (const mutate of cases) {
+      const sc = structuredClone(scenario);
+      mutate(sc);
+      expect(() => createState(sc)).toThrow();
+    }
+  });
+  it('本番のシナリオ01は検査を通る', () => {
+    expect(() => createState(structuredClone(scenario))).not.toThrow();
   });
 });

@@ -62,8 +62,13 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
 .result-box { background: var(--paper); border: 1px solid var(--line); padding: 20px 24px; max-width: 360px; text-align: center; }
 #result-text { font-size: 16px; line-height: 1.7; white-space: pre-line; }
 @media (max-width: 760px) {
-  main { flex-direction: column; }
-  #map-wrap { flex: none; height: 52vh; }
-  #panel { width: auto; border-left: none; border-top: 1px solid var(--line); flex: 1; }
+  /* スマホではページ全体をスクロールさせる(パネルを狭い枠に閉じ込めない) */
+  html, body { height: auto; }
+  body { display: block; }
+  header { position: sticky; top: 0; z-index: 1; }
+  main { display: block; }
+  #map-wrap { height: 55vh; }
+  #panel { width: auto; border-left: none; border-top: 1px solid var(--line); overflow: visible; }
   .controls { margin-left: 0; }
 }
+#btn-go { scroll-margin-bottom: 16px; }

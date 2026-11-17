@@ -47,8 +47,41 @@ export interface SimState {
   rng: Rng;
 }
 
+/** 浮動小数の誤差を吸収する幅(米の量の比較に使う) */
+const EPS = 1e-9;
+
+/** シナリオデータの整合性を検査する。問題があれば Error を投げる。 */
+export function validateScenario(sc: Scenario): void {
+  validateMap(sc.map);
+  const ids = new Set(sc.map.nodes.map((n) => n.id));
+  if (!(sc.stepDays > 0)) throw new Error('stepDays は正の数');
+  if (!(sc.carrierCapacity > 0)) throw new Error('carrierCapacity は正の数');
+  if (!(sc.carrierRation >= 0)) throw new Error('carrierRation は0以上');
+  if (!(sc.goalDays > 0)) throw new Error('goalDays は正の数');
+  if (!ids.has(sc.depotId)) throw new Error(`depotId が地図にない: ${sc.depotId}`);
+  if (!ids.has(sc.frontId)) throw new Error(`frontId が地図にない: ${sc.frontId}`);
+  for (const l of sc.map.links) {
+    const steps = l.days / sc.stepDays;
+    if (Math.abs(steps - Math.round(steps)) > 1e-6) {
+      throw new Error(`道の日数は1刻み(${sc.stepDays}日)の倍数にする: ${l.a}-${l.b} ${l.days}日`);
+    }
+  }
+  for (const [id, n] of Object.entries(sc.nodes)) {
+    if (!ids.has(id)) throw new Error(`nodes に地図にない拠点: ${id}`);
+    if (!(n.rice >= 0)) throw new Error(`米は0以上: ${id}`);
+    if (n.consumptionPerDay !== undefined && !(n.consumptionPerDay >= 0)) throw new Error(`消費は0以上: ${id}`);
+  }
+  const cids = new Set<string>();
+  for (const c of sc.convoys) {
+    if (cids.has(c.id)) throw new Error(`運搬隊IDが重複: ${c.id}`);
+    cids.add(c.id);
+    if (!ids.has(c.at)) throw new Error(`運搬隊の位置が地図にない: ${c.id} @ ${c.at}`);
+    if (!(Number.isInteger(c.carriers) && c.carriers > 0)) throw new Error(`人足の数は正の整数: ${c.id}`);
+  }
+}
+
 export function createState(scenario: Scenario): SimState {
-  validateMap(scenario.map);
+  validateScenario(scenario);
   const rice: Record<string, number> = {};
   for (const n of scenario.map.nodes) rice[n.id] = scenario.nodes[n.id]?.rice ?? 0;
   return {
@@ -118,7 +151,7 @@ export function step(state: SimState): void {
     const mv = convoy.move;
     if (!mv) continue;
     const need = eatenOver(convoy, sc.carrierRation, sc.stepDays);
-    if (convoy.cargo < need) {
+    if (convoy.cargo + EPS < need) {
       const where = mv.route[mv.leg]!;
       addLog(state, `${convoy.name}は食料が尽き、${nodeName(state, where)}へ引き返した(積み荷は失われた)`);
       convoy.cargo = 0;
@@ -126,7 +159,7 @@ export function step(state: SimState): void {
       convoy.move = null;
       continue;
     }
-    convoy.cargo -= need;
+    convoy.cargo = convoy.cargo - need < EPS ? 0 : convoy.cargo - need;
     mv.stepsLeft -= 1;
     if (mv.stepsLeft > 0) continue;
 
@@ -151,7 +184,7 @@ export function step(state: SimState): void {
     if (perDay <= 0) continue;
     const use = perDay * sc.stepDays;
     const have = state.rice[n.id] ?? 0;
-    if (have < use) {
+    if (have + EPS < use) {
       state.rice[n.id] = 0;
       if (n.id === sc.frontId) {
         state.outcome = 'lost';
@@ -159,7 +192,7 @@ export function step(state: SimState): void {
         return;
       }
     } else {
-      state.rice[n.id] = have - use;
+      state.rice[n.id] = have - use < EPS ? 0 : have - use;
     }
   }
 
