@@ -25,7 +25,9 @@ header {
 h1 { font-size: 18px; margin: 0; }
 h1 small { font-size: 12px; color: var(--ink-2); font-weight: normal; }
 #clock { font-size: 15px; font-variant-numeric: tabular-nums; }
-.controls { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+/* ボタンの文字は途中で折り返さない(入りきらなければボタンごと次の行へ) */
+.controls button, .controls .check { white-space: nowrap; }
 button {
   font: inherit; font-size: 14px; color: var(--ink); background: #fffaf0;
   border: 1px solid var(--line); border-radius: 4px; padding: 6px 10px; cursor: pointer;

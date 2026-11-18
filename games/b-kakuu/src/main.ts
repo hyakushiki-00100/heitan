@@ -893,6 +893,7 @@ window.addEventListener('resize', resize);
 
 setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
 setupShareDialog();
+$('ver').textContent = `試作 ${__APP_VERSION__}`;
 {
   const sel = $<HTMLSelectElement>('scenario');
   sel.innerHTML = SCENARIOS.map((x) => `<option value="${x.id}">${x.title}</option>`).join('');
