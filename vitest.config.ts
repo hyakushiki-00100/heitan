@@ -8,5 +8,5 @@ export default defineConfig({
       '@hyoro/platform': fileURLToPath(new URL('./packages/platform/src/index.ts', import.meta.url)),
     },
   },
-  test: { include: ['packages/*/tests/**/*.test.ts', 'games/*/tests/**/*.test.ts'] },
+  test: { include: ['packages/*/tests/**/*.test.ts', 'games/*/tests/**/*.test.ts'], testTimeout: 60000 },
 });

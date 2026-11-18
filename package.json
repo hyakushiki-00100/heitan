@@ -7,10 +7,13 @@
     "dev": "vite games/b-kakuu",
     "build": "vite build games/b-kakuu",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "balance": "vite-node scripts/balance.ts",
+    "screenshots": "vite-node scripts/screenshots.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
+    "playwright": "^1.63.0",
     "typescript": "5.9.3",
     "vite": "7.1.12",
     "vitest": "3.2.4"

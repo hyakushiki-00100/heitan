@@ -9,6 +9,12 @@ export interface Scoring {
 
 export const DEFAULT_SCORING: Scoring = { perPerson: 10, perSurplus: 1 };
 
+/**
+ * ★の基準(仮。1-7 で見直す)。得点が満点のこの割合以上で★1・★2・★3。陣を保てなければ★0。
+ * シナリオの starThresholds で変えられる
+ */
+export const DEFAULT_STAR_THRESHOLDS: readonly [number, number, number] = [0.6, 0.8, 0.95];
+
 export interface ExpeditionResult {
   /** 目標日数まで陣を保てたか */
   held: boolean;
@@ -21,6 +27,10 @@ export interface ExpeditionResult {
   /** 拠点ごとの余剰(米と物資の合計) */
   surplusByNode: { id: string; amount: number }[];
   score: number;
+  /** 満点(全員帰還・余剰0) */
+  maxScore: number;
+  /** ★の数(0〜3) */
+  stars: number;
 }
 
 /** 遠征の評価。遠征中に呼んでも、その時点の値を返す。 */
@@ -46,6 +56,10 @@ export function evaluate(state: SimState): ExpeditionResult {
     surplus += r;
   }
   const score = held ? (troopsHome + carriersHome) * scoring.perPerson - surplus * scoring.perSurplus : 0;
+  const maxScore = (state.army.troopsTotal + carriersTotal) * scoring.perPerson;
+  const th = sc.starThresholds ?? DEFAULT_STAR_THRESHOLDS;
+  const ratio = maxScore > 0 ? score / maxScore : 0;
+  const stars = !held ? 0 : ratio >= th[2] ? 3 : ratio >= th[1] ? 2 : ratio >= th[0] ? 1 : 0;
   return {
     held,
     troopsHome,
@@ -55,5 +69,7 @@ export function evaluate(state: SimState): ExpeditionResult {
     surplus,
     surplusByNode,
     score,
+    maxScore,
+    stars,
   };
 }

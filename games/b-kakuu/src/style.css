@@ -63,6 +63,8 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
 #log { font-size: 12px; padding-left: 1.4em; margin: 0; color: var(--ink-2); max-height: 220px; overflow-y: auto; }
 #log li:first-child { color: var(--ink); }
 #result {
+  /* スマホで上に固定したヘッダー(z-index 1)より手前に出す */
+  z-index: 5;
   position: fixed; inset: 0; background: rgba(43,38,32,.45); display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 #result[hidden] { display: none; }

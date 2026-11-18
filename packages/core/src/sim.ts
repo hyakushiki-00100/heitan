@@ -88,6 +88,8 @@ export interface Scenario {
   cards?: CardDef[];
   /** 米以外の物資。省略は米だけ */
   goods?: GoodDef[];
+  /** ★1・★2・★3 になる得点の割合(満点に対する)。省略時は DEFAULT_STAR_THRESHOLDS */
+  starThresholds?: [number, number, number];
 }
 
 /** playing=進行中 / done=撤退まで終えた / lost=陣の兵糧が尽きた */
@@ -114,6 +116,13 @@ export interface SimState {
   activeCards: CardId[];
   /** 自動の隊が蔵から陣へ運ぶときの道(蔵→陣のノード列)。既定は日数最短 */
   autoRoute: string[];
+  /**
+   * 物資の帳簿('rice' と物資ID → 量)。どこにも消えずに合計が合うかを確かめるために持つ。
+   * 最初の量 = 拠点 + 運搬中 + 軍勢の手持ち + eaten + lost
+   */
+  ledger: { initial: Record<string, number>; eaten: Record<string, number>; lost: Record<string, number> };
+  /** 記録用の数え上げ(評価・調整用) */
+  stats: { hungerSteps: number; starvedNode: string | null };
 }
 
 /** 浮動小数の誤差を吸収する幅(米の量の比較に使う) */
@@ -247,7 +256,31 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
     rng: new Rng(seed),
     activeCards: [],
     autoRoute: defaultRoute(scenario, scenario.depotId, scenario.frontId)!.nodes,
+    ledger: {
+      initial: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, totalOf(r === 'rice' ? rice : goods[r]!)])),
+      eaten: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, 0])),
+      lost: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, 0])),
+    },
+    stats: { hungerSteps: 0, starvedNode: null },
   };
+}
+
+const totalOf = (m: Record<string, number>) => Object.values(m).reduce((a, b) => a + b, 0);
+
+/**
+ * 物資の合計が合っているか。合っていなければ、ずれている物資とその量を返す(合っていれば空)。
+ * 最初の量 = 拠点 + 運搬中 + 軍勢の手持ち + 食べた・使った量 + 失った量
+ */
+export function ledgerMismatch(state: SimState, tolerance = 1e-6): { res: string; diff: number }[] {
+  const out: { res: string; diff: number }[] = [];
+  for (const res of Object.keys(state.ledger.initial)) {
+    let now = res === 'rice' ? totalOf(state.rice) : totalOf(state.goods[res]!);
+    for (const c of state.convoys) now += res === 'rice' ? c.cargo : (c.goods[res] ?? 0);
+    now += res === 'rice' ? state.army.cargo : (state.army.goods[res] ?? 0);
+    const diff = state.ledger.initial[res]! - (now + state.ledger.eaten[res]! + state.ledger.lost[res]!);
+    if (Math.abs(diff) > tolerance) out.push({ res, diff });
+  }
+  return out;
 }
 
 export function currentDay(state: SimState): number {
@@ -448,12 +481,16 @@ function applyRisk(
   if (chance <= 0) return 0;
   if (state.rng.next() >= chance) return 0;
   const loss = link.risk.loss;
-  const lost = holder.cargo * loss;
-  holder.cargo = clean(holder.cargo - lost);
+  const before = holder.cargo;
+  holder.cargo = clean(holder.cargo - holder.cargo * loss);
+  const lost = before - holder.cargo;
+  state.ledger.lost.rice! += lost;
   const lostGoods: Record<string, number> = {};
   for (const id of Object.keys(holder.goods)) {
-    lostGoods[id] = holder.goods[id]! * loss;
-    holder.goods[id] = clean(holder.goods[id]! - lostGoods[id]!);
+    const b = holder.goods[id]!;
+    holder.goods[id] = clean(b - b * loss);
+    lostGoods[id] = b - holder.goods[id]!;
+    state.ledger.lost[id] = (state.ledger.lost[id] ?? 0) + lostGoods[id]!;
   }
   const total = lost + goodsWeight(lostGoods);
   if (total > 0) addLog(state, `${who}は${link.risk.label}で荷の${Math.round(loss * 100)}%(${cargoText(state, lost, lostGoods)})を失った`);
@@ -649,6 +686,7 @@ function stepArmy(state: SimState): void {
   const fed = feedArmy(state, pool);
   if (fed < a.troops) {
     // 食べられなかった兵の一部が離脱する
+    state.stats.hungerSteps += 1;
     const unfed = a.troops - fed;
     const rate = sc.army.hungerDropRate ?? 0.25;
     const out = Math.min(unfed, Math.ceil(unfed * rate - EPS));
@@ -719,9 +757,15 @@ function feedArmy(state: SimState, pool: FoodPool): number {
     const per = g.perTroopPerDay * dt;
     if (g.kind === 'cook' && per > 0) fed = Math.min(fed, Math.floor((pool.get(g.id) + EPS) / per));
   }
-  pool.set('rice', clean(pool.get('rice') - fed * perRice));
+  /** 減らして、実際に減った量を帳簿の「食べた・使った」に足す(clean で切り捨てた端数も含める) */
+  const use = (id: string, amount: number) => {
+    const before = pool.get(id);
+    pool.set(id, clean(before - amount));
+    state.ledger.eaten[id] = (state.ledger.eaten[id] ?? 0) + (before - pool.get(id));
+  };
+  use('rice', fed * perRice);
   for (const g of goodsOf(sc)) {
-    if (g.kind === 'cook') pool.set(g.id, clean(pool.get(g.id) - fed * g.perTroopPerDay * dt));
+    if (g.kind === 'cook') use(g.id, fed * g.perTroopPerDay * dt);
   }
   // health の物資: 食べた兵の分だけ使う。足りなければ不足の割合だけ体を壊す端数がたまる
   let shortFrac = 0;
@@ -730,9 +774,9 @@ function feedArmy(state: SimState, pool: FoodPool): number {
     const need = fed * g.perTroopPerDay * dt;
     if (need <= 0) continue;
     const have = pool.get(g.id);
-    const use = Math.min(have, need);
-    pool.set(g.id, clean(have - use));
-    shortFrac = Math.max(shortFrac, 1 - use / need);
+    const take = Math.min(have, need);
+    use(g.id, take);
+    shortFrac = Math.max(shortFrac, 1 - take / need);
   }
   if (shortFrac > EPS) {
     a.healthDebt += fed * (sc.army.healthDropPerDay ?? 0.02) * dt * shortFrac;
@@ -762,14 +806,20 @@ export function step(state: SimState): void {
     const need = eatenOver(convoy, carrierRationOf(state, mv.route), sc.stepDays);
     if (convoy.cargo + EPS < need) {
       addLog(state, `${convoy.name}は道中で食料が尽き、人足が離脱した(積み荷は失われた)`);
+      state.ledger.lost.rice! += convoy.cargo;
       convoy.cargo = 0;
-      for (const id of Object.keys(convoy.goods)) convoy.goods[id] = 0;
+      for (const id of Object.keys(convoy.goods)) {
+        state.ledger.lost[id] = (state.ledger.lost[id] ?? 0) + convoy.goods[id]!;
+        convoy.goods[id] = 0;
+      }
       convoy.at = mv.route[mv.leg]!;
       convoy.move = null;
       convoy.dropped = true;
       continue;
     }
+    const beforeEat = convoy.cargo;
     convoy.cargo = clean(convoy.cargo - need);
+    state.ledger.eaten.rice! += beforeEat - convoy.cargo;
     const from = mv.route[mv.leg]!;
     const { reached, finished } = advance(sc, mv);
     if (reached) {
@@ -804,7 +854,7 @@ export function step(state: SimState): void {
     // 体を壊して離脱した分を除いても、食べられない兵がいれば陣は保てない
     if (fed < Math.min(troopsBefore, a.troops)) {
       const what = shortNames(state, pool);
-      state.rice[at] = 0;
+      state.stats.starvedNode = at;
       state.outcome = 'lost';
       addLog(state, `${nodeName(state, at)}の${what}が尽きた。遠征は失敗`);
       return;
@@ -817,7 +867,9 @@ export function step(state: SimState): void {
   for (const n of sc.map.nodes) {
     const perDay = sc.nodes[n.id]?.consumptionPerDay ?? 0;
     if (perDay <= 0) continue;
-    state.rice[n.id] = clean(Math.max(0, (state.rice[n.id] ?? 0) - perDay * sc.stepDays));
+    const before = state.rice[n.id] ?? 0;
+    state.rice[n.id] = clean(Math.max(0, before - perDay * sc.stepDays));
+    state.ledger.eaten.rice! += before - state.rice[n.id]!;
   }
 
   // 4. 撤退の開始と、遠征の終わり
