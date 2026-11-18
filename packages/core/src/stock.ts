@@ -29,6 +29,7 @@ export function frontDaysLeft(
   const holding = state.army.phase === 'hold' && state.army.at === nodeId;
   const health: { name: string; days: number | null }[] = [];
   for (const g of state.scenario.goods ?? []) {
+    if (g.kind === 'fodder') continue; // 飼い葉は兵が使わない
     const perDay = holding ? state.army.troops * g.perTroopPerDay : 0;
     const d = daysLeft(state.goods[g.id]![nodeId] ?? 0, perDay);
     if (g.kind === 'health') {

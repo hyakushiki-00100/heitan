@@ -18,16 +18,25 @@ export interface NodeSetup {
  * 米以外の物資の働き。
  * cook: 欠けると米があっても食べられない(薪)。米が尽きたのと同じ扱い
  * health: 欠けるとすぐには困らないが、不足が続くと兵が体を壊して少しずつ離脱する(塩・味噌)
+ * fodder: 馬だけが食べる(飼い葉)。兵は使わない。道中で尽きると、馬は荷を運べなくなる
  */
-export type GoodKind = 'cook' | 'health';
+export type GoodKind = 'cook' | 'health' | 'fodder';
 
 /** 米以外の物資。兵だけが使う(人足は米だけを食べ、薪は道中で拾える、という簡略化) */
 export interface GoodDef {
   id: string;
   name: string;
   kind: GoodKind;
-  /** 兵1人が1日に使う量 */
+  /** 兵1人が1日に使う量(fodder では 0) */
   perTroopPerDay: number;
+}
+
+/** 荷を運ぶ馬 */
+export interface HorseSetup {
+  /** 1頭が運べる量 */
+  capacity: number;
+  /** 1頭が1日に食べる飼い葉 */
+  fodderPerDay: number;
 }
 
 export interface ArmySetup {
@@ -79,7 +88,9 @@ export interface Scenario {
   goalDays: number;
   seed: number;
   nodes: Record<string, NodeSetup>;
-  convoys: { id: string; name: string; carriers: number; at: string }[];
+  convoys: { id: string; name: string; carriers: number; horses?: number; at: string }[];
+  /** 馬の性質。馬を使う隊があるシナリオでは必須 */
+  horse?: HorseSetup;
   /** 前線の軍勢。最初は frontId にいる */
   army: ArmySetup;
   /** 評価の重み。省略時は DEFAULT_SCORING */
@@ -152,9 +163,11 @@ export function validateScenario(sc: Scenario): void {
   for (const g of sc.goods ?? []) {
     if (g.id === 'rice' || goodIds.has(g.id)) throw new Error(`物資IDが重複: ${g.id}`);
     goodIds.add(g.id);
-    if (g.kind !== 'cook' && g.kind !== 'health') throw new Error(`物資の働きが不正: ${g.id}`);
+    if (g.kind !== 'cook' && g.kind !== 'health' && g.kind !== 'fodder') throw new Error(`物資の働きが不正: ${g.id}`);
     if (!(g.perTroopPerDay >= 0)) throw new Error(`物資の消費は0以上: ${g.id}`);
+    if (g.kind === 'fodder' && g.perTroopPerDay !== 0) throw new Error(`飼い葉は兵が使わない(perTroopPerDay は0): ${g.id}`);
   }
+  if ((sc.goods ?? []).filter((g) => g.kind === 'fodder').length > 1) throw new Error('飼い葉(fodder)は1種類まで');
   for (const [id, n] of Object.entries(sc.nodes)) {
     if (!ids.has(id)) throw new Error(`nodes に地図にない拠点: ${id}`);
     if (!(n.rice >= 0)) throw new Error(`米は0以上: ${id}`);
@@ -170,6 +183,11 @@ export function validateScenario(sc: Scenario): void {
     cids.add(c.id);
     if (!ids.has(c.at)) throw new Error(`運搬隊の位置が地図にない: ${c.id} @ ${c.at}`);
     if (!(Number.isInteger(c.carriers) && c.carriers > 0)) throw new Error(`人足の数は正の整数: ${c.id}`);
+    if (c.horses !== undefined && !(Number.isInteger(c.horses) && c.horses >= 0)) throw new Error(`馬の数は0以上の整数: ${c.id}`);
+    if ((c.horses ?? 0) > 0) {
+      if (!sc.horse || !(sc.horse.capacity > 0) || !(sc.horse.fodderPerDay >= 0)) throw new Error(`馬を使うなら horse(capacity, fodderPerDay)が要る: ${c.id}`);
+      if (!(sc.goods ?? []).some((g) => g.kind === 'fodder')) throw new Error(`馬を使うなら飼い葉(kind: fodder)の物資が要る: ${c.id}`);
+    }
   }
   const seenCards = new Set<string>();
   for (const c of sc.cards ?? []) {
@@ -196,6 +214,21 @@ export function goodsOf(sc: Scenario): GoodDef[] {
   return sc.goods ?? [];
 }
 
+/** 飼い葉の物資(無ければ null) */
+export function fodderGood(sc: Scenario): GoodDef | null {
+  return goodsOf(sc).find((g) => g.kind === 'fodder') ?? null;
+}
+
+/** 運搬隊が1回に運べる上限(人足の分 + 馬の分) */
+export function convoyCapacity(state: SimState, c: Convoy): number {
+  return maxLoad(c, state.scenario.carrierCapacity, state.scenario.horse?.capacity ?? 0);
+}
+
+/** 運搬隊の馬が days 日に食べる飼い葉 */
+export function fodderFor(state: SimState, c: Convoy, days: number): number {
+  return c.horses * (state.scenario.horse?.fodderPerDay ?? 0) * days;
+}
+
 /** 物資の量の合計(重さ。どの物資も1単位=1) */
 export function goodsWeight(g: Record<string, number>): number {
   let w = 0;
@@ -207,7 +240,7 @@ export function goodsWeight(g: Record<string, number>): number {
 export function armyDailyNeed(state: SimState): { rice: number; goods: Record<string, number> } {
   const a = state.army;
   const goods: Record<string, number> = {};
-  for (const g of goodsOf(state.scenario)) goods[g.id] = a.troops * g.perTroopPerDay;
+  for (const g of goodsOf(state.scenario)) if (g.kind !== 'fodder') goods[g.id] = a.troops * g.perTroopPerDay;
   return { rice: a.troops * a.ration, goods };
 }
 
@@ -236,7 +269,16 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
     step: 0,
     rice,
     goods,
-    convoys: scenario.convoys.map((c) => ({ ...c, cargo: 0, goods: emptyGoods(), move: null, dropped: false, auto: false })),
+    convoys: scenario.convoys.map((c) => ({
+      ...c,
+      horses: c.horses ?? 0,
+      horsesTired: false,
+      cargo: 0,
+      goods: emptyGoods(),
+      move: null,
+      dropped: false,
+      auto: false,
+    })),
     army: {
       troops: a.troops,
       troopsTotal: a.troops,
@@ -403,7 +445,7 @@ export function dispatch(
     const haveG = state.goods[id]![convoy.at] ?? 0;
     if (v > haveG + EPS) return { ok: false, error: `拠点の${def.name}(${r1(haveG)})が足りません` };
   }
-  const cap = maxLoad(convoy, state.scenario.carrierCapacity);
+  const cap = convoyCapacity(state, convoy);
   if (load + goodsWeight(goods) > cap + EPS) return { ok: false, error: `積載上限(${cap})を超えています` };
   const have = state.rice[convoy.at] ?? 0;
   if (load > have + EPS) return { ok: false, error: `拠点の米(${r1(have)})が足りません` };
@@ -416,6 +458,7 @@ export function dispatch(
     convoy.goods[g.id] = v;
   }
   convoy.move = startMove(state.scenario, route.nodes);
+  convoy.horsesTired = false;
   addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}を出発(${cargoText(state, load, goods)})`);
   return { ok: true, route };
 }
@@ -443,6 +486,8 @@ export interface TripPreview {
   arrive: number;
   /** 危険がすべて起きた場合に届く量(負なら道中で食料が尽きる) */
   arriveWorst: number;
+  /** 馬が道中で食べる飼い葉(馬がいなければ0) */
+  fodderNeed: number;
   risks: { a: string; b: string; risk: LinkRisk }[];
 }
 
@@ -460,7 +505,14 @@ export function tripPreview(state: SimState, convoy: Convoy, nodes: string[], lo
     if (link.risk) worst *= 1 - link.risk.loss;
   }
   const eat = eatenOver(convoy, carrierRationOf(state, nodes), route.days);
-  return { route, eat, arrive: load - eat, arriveWorst: worst < -EPS ? worst : clean(Math.max(0, worst)), risks: routeRisks(sc.map, nodes) };
+  return {
+    route,
+    eat,
+    arrive: load - eat,
+    arriveWorst: worst < -EPS ? worst : clean(Math.max(0, worst)),
+    fodderNeed: fodderFor(state, convoy, route.days),
+    risks: routeRisks(sc.map, nodes),
+  };
 }
 
 /**
@@ -631,7 +683,7 @@ export function safeReturnFood(state: SimState, c: Convoy, from: string): number
   const sc = state.scenario;
   const nodes = defaultRoute(sc, from, sc.depotId)?.nodes;
   if (!nodes) return 0;
-  const cap = maxLoad(c, sc.carrierCapacity);
+  const cap = convoyCapacity(state, c);
   const ok = (l: number) => (tripPreview(state, c, nodes, l)?.arriveWorst ?? -1) + EPS >= 0;
   if (!ok(cap)) return cap;
   let lo = 0;
@@ -793,6 +845,40 @@ function feedArmy(state: SimState, pool: FoodPool): number {
   return fed;
 }
 
+/**
+ * 移動中の運搬隊の馬に飼い葉を食べさせる。足りなければ、馬は荷を運べなくなり、
+ * 人足が運べる量を超えた分の荷(米と物資を同じ割合で)を捨てる。捨てた量は帳簿の「失った量」に入る
+ */
+function feedHorses(state: SimState, c: Convoy): void {
+  const fg = fodderGood(state.scenario);
+  if (!fg || c.horses <= 0) return;
+  const need = fodderFor(state, c, state.scenario.stepDays);
+  const have = c.goods[fg.id] ?? 0;
+  const eat = Math.min(have, need);
+  c.goods[fg.id] = clean(have - eat);
+  state.ledger.eaten[fg.id] = (state.ledger.eaten[fg.id] ?? 0) + (have - c.goods[fg.id]!);
+  if (have + EPS >= need) return;
+  // 飼い葉が足りない: 馬は荷を運べない。人足だけで運べる量まで荷を減らす
+  const carrierCap = c.carriers * state.scenario.carrierCapacity;
+  const total = c.cargo + goodsWeight(c.goods);
+  if (total > carrierCap + EPS) {
+    const keep = carrierCap / total;
+    const lostRice = c.cargo * (1 - keep);
+    c.cargo = clean(c.cargo - lostRice);
+    state.ledger.lost.rice! += lostRice;
+    const lostGoods: Record<string, number> = {};
+    for (const id of Object.keys(c.goods)) {
+      const b = c.goods[id]!;
+      c.goods[id] = clean(b * keep);
+      lostGoods[id] = b - c.goods[id]!;
+      state.ledger.lost[id] = (state.ledger.lost[id] ?? 0) + lostGoods[id]!;
+    }
+    addLog(state, `${c.name}は${fg.name}が尽き、馬が荷を運べなくなった(${cargoText(state, lostRice, lostGoods)}を捨てた)`);
+  }
+  // 荷が人足だけで運べる量なら困らないので記録しない(空荷に近い帰り道で毎回出ると見づらいため)
+  c.horsesTired = true;
+}
+
 /** 1刻み(既定は半日)進める。 */
 export function step(state: SimState): void {
   if (state.outcome !== 'playing') return;
@@ -820,6 +906,7 @@ export function step(state: SimState): void {
     const beforeEat = convoy.cargo;
     convoy.cargo = clean(convoy.cargo - need);
     state.ledger.eaten.rice! += beforeEat - convoy.cargo;
+    feedHorses(state, convoy);
     const from = mv.route[mv.leg]!;
     const { reached, finished } = advance(sc, mv);
     if (reached) {

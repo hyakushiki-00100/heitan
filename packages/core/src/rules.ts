@@ -7,6 +7,8 @@ import { candidateRoutes, routeFromNodes } from './route';
 import {
   armyDailyNeed,
   cardParams,
+  convoyCapacity,
+  fodderGood,
   carrierRationOf,
   currentDay,
   dispatch,
@@ -20,7 +22,7 @@ import {
   type SimState,
 } from './sim';
 import { nodeConsumptionPerDay } from './stock';
-import { maxLoad, type Convoy } from './unit';
+import type { Convoy } from './unit';
 
 const EPS = 1e-9;
 
@@ -49,7 +51,7 @@ function pathBetween(state: SimState, a: string, b: string): string[] | null {
  * worstCase なら道の危険がすべて起きても届く量にする。積める上限を超えるなら null
  */
 function loadFor(state: SimState, c: Convoy, nodes: string[], arriveAtLeast: number, worstCase: boolean): number | null {
-  const cap = maxLoad(c, state.scenario.carrierCapacity);
+  const cap = convoyCapacity(state, c);
   const ok = (l: number) => {
     const p = tripPreview(state, c, nodes, l);
     if (!p) return false;
@@ -184,19 +186,23 @@ export function relayNode(state: SimState): string | null {
 export type AutoRole = 'direct' | 'near' | 'far';
 
 /**
- * 自動の隊の役割。中継経由なら、自動の隊の前から nearRatio の割合を「蔵⇔中継地」(near)、
- * 残りを「中継地⇔陣」(far)に分ける(どちらも1隊以上)。それ以外は全員 direct
+ * 自動の隊の役割。中継経由なら、自動の「人足だけの隊」を「蔵⇔中継地」(near)と「中継地⇔陣」(far)に分ける。
+ * 分ける割合は区間の日数の比(長い区間ほど多くの隊を当てる)。どちらも1隊以上。
+ * 馬を連れた隊は、飼い葉が蔵にしかないので、中継経由でも蔵から直送(direct)にする。
+ * 中継経由でなければ全員 direct
  */
 export function autoRoles(state: SimState): Map<string, AutoRole> {
   const autos = state.convoys.filter((c) => c.auto && !c.dropped);
   const roles = new Map<string, AutoRole>();
-  const chukei = cardParams(state, 'chukei');
-  if (!chukei || autos.length < 2 || !relayNode(state)) {
-    for (const c of autos) roles.set(c.id, 'direct');
-    return roles;
-  }
-  const near = Math.min(autos.length - 1, Math.max(1, Math.round(autos.length * (chukei.nearRatio ?? 0.4))));
-  autos.forEach((c, i) => roles.set(c.id, i < near ? 'near' : 'far'));
+  for (const c of autos) roles.set(c.id, 'direct');
+  const relay = relayNode(state);
+  const walkers = autos.filter((c) => c.horses <= 0);
+  if (!cardParams(state, 'chukei') || walkers.length < 2 || !relay) return roles;
+  const r = state.autoRoute;
+  const nearDays = routeDays(state, r.slice(0, r.indexOf(relay) + 1));
+  const ratio = nearDays / routeDays(state, r);
+  const near = Math.min(walkers.length - 1, Math.max(1, Math.round(walkers.length * ratio)));
+  walkers.forEach((c, i) => roles.set(c.id, i < near ? 'near' : 'far'));
   return roles;
 }
 
@@ -222,7 +228,7 @@ function stockRetreatStop(state: SimState, c: Convoy): boolean {
   const sc = state.scenario;
   const plan = retreatPlan(state);
   const back = [...retreatRoute(state).nodes].reverse(); // 蔵→陣の向き
-  const cap = maxLoad(c, sc.carrierCapacity);
+  const cap = convoyCapacity(state, c);
   for (const stop of plan.stops) {
     const target = stop.required + stop.riskBuffer;
     if (target <= EPS) continue;
@@ -237,16 +243,32 @@ function stockRetreatStop(state: SimState, c: Convoy): boolean {
     if (backFood === null) continue;
     const rice = loadFor(state, c, nodes, short.rice! + backFood, true);
     if (rice === null) continue;
-    // 物資は残りの積載に収まる分だけ(収まらない分は次の隊が運ぶ)
+    // 馬を連れているなら往路の飼い葉も積む。物資は残りの積載に収まる分だけ(収まらない分は次の隊が運ぶ)
     const goods: Amounts = {};
-    const room = Math.max(0, cap - rice);
+    const depotAvail = nodeAmounts(state, sc.depotId);
+    const fodder = horseFodder(state, c, tripPreview(state, c, nodes, 0)!.fodderNeed, depotAvail);
+    if (rice + fodder.amount > fodder.capacity + EPS) continue;
+    const room = Math.max(0, fodder.capacity - rice - fodder.amount);
     const wantGoods = total(short) - short.rice!;
     const scale = wantGoods > room ? room / wantGoods : 1;
     for (const g of goodsOf(sc)) goods[g.id] = Math.min(short[g.id]! * scale, state.goods[g.id]![sc.depotId] ?? 0);
+    if (fodder.id) goods[fodder.id] = Math.min((goods[fodder.id] ?? 0) + fodder.amount, state.goods[fodder.id]![sc.depotId] ?? 0);
     if (rice > (state.rice[sc.depotId] ?? 0) + EPS) continue;
     if (dispatch(state, c.id, stop.id, rice, nodes, goods).ok) return true;
   }
   return false;
+}
+
+/**
+ * 馬を連れた隊が往路のために積む飼い葉と、そのときの積める上限。
+ * 飼い葉が足りなければ馬は運べないので、上限は人足の分だけ(飼い葉は積まない)
+ */
+function horseFodder(state: SimState, c: Convoy, need: number, avail: Amounts): { id: string | null; amount: number; capacity: number } {
+  const fg = fodderGood(state.scenario);
+  const carriersOnly = c.carriers * state.scenario.carrierCapacity;
+  if (!fg || c.horses <= 0) return { id: null, amount: 0, capacity: convoyCapacity(state, c) };
+  if ((avail[fg.id] ?? 0) + EPS < need) return { id: fg.id, amount: 0, capacity: carriersOnly };
+  return { id: fg.id, amount: need, capacity: convoyCapacity(state, c) };
 }
 
 /** 拠点で待機している「自分以外の」自動の隊が、そこから蔵へ帰るのに要る米(手を付けないでおく分) */
@@ -278,9 +300,12 @@ function sendFull(state: SimState, c: Convoy, to: string, onlyIfArriveBy: number
   const here = nodeAmounts(state, c.at);
   const avail: Amounts = {};
   for (const r of resIds(state)) avail[r] = Math.max(0, (here[r] ?? 0) - (reserve[r] ?? 0) - (r === 'rice' ? othersHomeFood(state, c) : 0));
-  const eat = tripPreview(state, c, nodes, 0)!.eat;
+  const pre = tripPreview(state, c, nodes, 0)!;
+  const eat = pre.eat;
   if (avail.rice! + EPS < eat) return false;
-  const room = maxLoad(c, sc.carrierCapacity) - eat;
+  // 馬を連れているなら、往路で食べる飼い葉を先に積む。飼い葉が足りなければ馬に頼らず人足だけで運べる量にする
+  const fodder = horseFodder(state, c, pre.fodderNeed, avail);
+  const room = fodder.capacity - eat - fodder.amount;
   if (room <= EPS) return false;
   // 足りない量の比のまま、積める上限まで増やす(足りない量が上限より少なくても満載で運ぶ)
   const load: Amounts = {};
@@ -297,6 +322,7 @@ function sendFull(state: SimState, c: Convoy, to: string, onlyIfArriveBy: number
   const rice = eat + load.rice!;
   const goods: Amounts = {};
   for (const g of goodsOf(sc)) goods[g.id] = load[g.id]!;
+  if (fodder.id) goods[fodder.id] = (goods[fodder.id] ?? 0) + fodder.amount;
   // 届く量が積み荷の3割に満たないなら、運ぶ意味が薄いので出さない
   if (total(load) < (rice + total(goods)) * 0.3) return false;
   return dispatch(state, c.id, to, rice, nodes, goods).ok;
@@ -327,7 +353,7 @@ export function runRules(state: SimState): void {
         // 中継地にある分も「やがて陣へ届く」として数える。
         // 米は中継地から陣へ運ぶ間に食べる分を引いた割合(満載1回で届く割合)を掛ける。物資は食べないのでそのまま
         const farNodes = pathBetween(state, relay, front)!;
-        const cap = maxLoad(c, sc.carrierCapacity);
+        const cap = convoyCapacity(state, c);
         const reach = Math.max(0, tripPreview(state, c, farNodes, cap)!.arrive) / cap;
         const here = nodeAmounts(state, relay);
         const reserve = reserveAt(state, relay);
@@ -338,7 +364,12 @@ export function runRules(state: SimState): void {
           extra[r] = r === 'rice' ? v * reach : v;
         }
         const need = frontDeficit(state, extra);
-        if (total(need) > EPS) sendFull(state, c, relay, goal - routeDays(state, farNodes), need);
+        // 中継地に、中継地⇔陣の隊が1巡で運べる量より多く溜まっているなら送らない(溜まるだけで余剰になる)
+        const farCap = state.convoys
+          .filter((o) => roles.get(o.id) === 'far')
+          .reduce((t, o) => t + convoyCapacity(state, o), 0);
+        const stocked = total(extra);
+        if (total(need) > EPS && stocked < farCap) sendFull(state, c, relay, goal - routeDays(state, farNodes), need);
       }
       continue;
     }

@@ -170,7 +170,8 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const goodsText = goodsOf(sc)
       .map((g) => ({ g, v: state.goods[g.id]![n.id] ?? 0 }))
       .filter((x) => x.v > 1e-9)
-      .map((x) => `${x.g.name}${fmt(x.v)}`)
+      // 狭い画面では、名前を1文字・数字を整数にして短くする(隣の拠点に文字がかかるため)
+      .map((x) => (v.w < 600 ? `${x.g.name[0]}${Math.round(x.v)}` : `${x.g.name}${fmt(x.v)}`))
       .join(' ');
     if (goodsText) {
       // 待機中の隊の印(拠点の周り、半径 NODE_R+12 に置く)と重ならないよう、その外側に書く

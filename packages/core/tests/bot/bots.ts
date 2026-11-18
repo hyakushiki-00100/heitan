@@ -9,7 +9,8 @@ import {
   candidateRoutes,
   currentDay,
   dispatch,
-  maxLoad,
+  convoyCapacity,
+  fodderGood,
   nodeAmounts,
   retreatPlan,
   runRules,
@@ -40,18 +41,26 @@ export const naive: Bot = {
         // 撤退が始まった後や、撤退開始までに着かないなら出さない
         const route = candidateRoutes(sc.map, c.at, sc.frontId, 1)[0];
         if (!route || s.army.phase !== 'hold' || currentDay(s) + route.days > sc.goalDays) continue;
-        const eat = tripPreview(s, c, route.nodes, 0)!.eat;
-        const room = maxLoad(c, sc.carrierCapacity) - eat;
+        const pre = tripPreview(s, c, route.nodes, 0)!;
+        const eat = pre.eat;
         const here = nodeAmounts(s, c.at);
         const shares = retreatPlan(s).shares;
         const goods: Record<string, number> = {};
-        let used = 0;
-        for (const [id, sh] of Object.entries(shares)) {
-          if (id === 'rice') continue;
-          goods[id] = Math.min(room * sh, here[id] ?? 0);
-          used += goods[id]!;
+        // 馬を連れていれば往路の飼い葉を先に積む(画面の「陣の割合で満載」と同じ)。足りなければ人足の分だけ運ぶ
+        const fg = fodderGood(sc);
+        let cap = convoyCapacity(s, c);
+        if (fg && c.horses > 0) {
+          if ((here[fg.id] ?? 0) >= pre.fodderNeed) goods[fg.id] = pre.fodderNeed;
+          else cap = c.carriers * sc.carrierCapacity;
         }
-        const rice = Math.min(eat + room - used, here.rice ?? 0);
+        const room = cap - eat - (goods[fg?.id ?? ''] ?? 0);
+        let usedShare = 0;
+        for (const [id, sh] of Object.entries(shares)) {
+          if (id === 'rice' || sh <= 0) continue;
+          goods[id] = Math.min(room * sh, here[id] ?? 0);
+          usedShare += goods[id]!;
+        }
+        const rice = Math.min(eat + room - usedShare, here.rice ?? 0);
         if (rice <= eat) continue;
         dispatch(s, c.id, sc.frontId, rice, route.nodes, goods);
       } else {

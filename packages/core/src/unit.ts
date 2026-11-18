@@ -16,6 +16,10 @@ export interface Convoy {
   name: string;
   /** 人足の数 */
   carriers: number;
+  /** 馬の数(荷を運ぶ。米は食べず飼い葉を食べる) */
+  horses: number;
+  /** 飼い葉が尽きて、馬が荷を運べなくなっている(次に出発するときに戻る) */
+  horsesTired: boolean;
   /** 今いる拠点(移動中は最後に通った拠点) */
   at: string;
   /** 積んでいる米(人足が道中で食べるのはこの米) */
@@ -58,9 +62,9 @@ export interface Army {
   dropped: number;
 }
 
-/** 1回の出発で運べる上限 */
-export function maxLoad(convoy: Convoy, carrierCapacity: number): number {
-  return convoy.carriers * carrierCapacity;
+/** 1回の出発で運べる上限(人足の分 + 馬の分) */
+export function maxLoad(convoy: Convoy, carrierCapacity: number, horseCapacity = 0): number {
+  return convoy.carriers * carrierCapacity + convoy.horses * horseCapacity;
 }
 
 /** 運搬隊が days 日歩く間に食べる量 */
