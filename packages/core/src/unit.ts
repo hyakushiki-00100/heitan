@@ -24,6 +24,8 @@ export interface Convoy {
   move: Move | null;
   /** 道中で食料が尽きて離脱した(もう動かせない) */
   dropped: boolean;
+  /** 自動で動くか(ルールカードに従う)。手動の隊は false */
+  auto: boolean;
 }
 
 export type ArmyPhase = 'hold' | 'retreat' | 'home' | 'gone';

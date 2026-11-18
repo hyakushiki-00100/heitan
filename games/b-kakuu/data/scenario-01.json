@@ -31,6 +31,11 @@
   },
   "army": { "troops": 24, "ration": 0.5, "capacityPer": 2 },
   "scoring": { "perPerson": 10, "perSurplus": 1 },
+  "cards": [
+    { "id": "kiro", "name": "帰路分を残す", "text": "自動の隊は、陣の2日分と撤退で持ち出す分・撤退路の置き米を減らす持ち出しをしない。帰り分は荷を失っても尽きない量を積み、撤退路の置き米も運ぶ。撤退する兵は、陣にいる運搬隊(手動の隊も)の帰り分を残す", "params": { "frontReserveDays": 2 } },
+    { "id": "chukei", "name": "中継経由", "text": "自動の隊を「蔵⇔中継地」と「中継地⇔陣」に分けて往復させる(中継地は自動便の道の真ん中に近い拠点)", "params": { "nearRatio": 0.4 } },
+    { "id": "goei", "name": "護衛付き", "text": "危険な道を行く運搬隊に護衛を付ける。その隊に危険が起きる確率が4分の1になる代わりに、人足の食事が1割増える", "params": { "chanceFactor": 0.25, "rationFactor": 1.1 } }
+  ],
   "convoys": [
     { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
     { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" },

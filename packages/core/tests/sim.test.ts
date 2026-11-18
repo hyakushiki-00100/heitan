@@ -116,7 +116,8 @@ describe('撤退(帰り道の補給)', () => {
     expect(plan.need).toBe(60);
     expect(plan.capacity).toBe(48);
     expect(plan.fromFront).toBe(48);
-    expect(plan.stops).toEqual([{ id: 'kawa', required: 12, have: 0 }]);
+    // テストの既定では道の危険を外しているので、危険への上乗せは0
+    expect(plan.stops).toEqual([{ id: 'kawa', required: 12, have: 0, riskBuffer: 0 }]);
   });
   it('20日目に撤退を始め、陣から持てるだけ持ち出す。陣での消費は止まる', () => {
     const s = fresh((sc) => (sc.nodes.jin!.rice = 1000));

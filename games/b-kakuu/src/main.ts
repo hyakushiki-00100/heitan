@@ -10,8 +10,13 @@ import {
   maxLoad,
   nodeConsumptionPerDay,
   retreatPlan,
+  relayNode,
+  setAuto,
+  setAutoRoute,
+  setCardActive,
   setRetreatRoute,
-  step,
+  stepWithRules,
+  type CardId,
   tripPreview,
   type Scenario,
   type SimState,
@@ -145,10 +150,11 @@ function tick(now: number): void {
     acc += dt;
     while (acc >= interval && running) {
       acc -= interval;
-      const movingBefore = new Set(state.convoys.filter((c) => c.move).map((c) => c.id));
+      // 一時停止の判断は手動の隊だけ(自動の隊が着くたびに止まると進まないため)
+      const movingBefore = new Set(state.convoys.filter((c) => c.move && !c.auto).map((c) => c.id));
       const phaseBefore = state.army.phase;
       const troopsBefore = state.army.troops;
-      step(state);
+      stepWithRules(state);
       // 指図が要りそうな出来事があったら止める
       const arrived = state.convoys.some((c) => movingBefore.has(c.id) && !c.move);
       const armyEvent = state.army.phase !== phaseBefore || state.army.troops !== troopsBefore;
@@ -246,11 +252,64 @@ function renderRetreat(): void {
   });
 }
 
+/** ルールカードと自動便の欄 */
+function renderCards(): void {
+  const box = $('cards');
+  const sc = state.scenario;
+  const cards = sc.cards ?? [];
+  const relay = relayNode(state);
+  const autoCount = state.convoys.filter((c) => c.auto && !c.dropped).length;
+  const alive = state.convoys.filter((c) => !c.dropped).length;
+  const opts = candidateRoutes(sc.map, sc.depotId, sc.frontId, 3);
+  const cur = state.autoRoute.join('>');
+  const rows = [
+    `<div class="row"><button type="button" id="btn-all-auto">${autoCount === alive ? '全隊を手動に' : '全隊を自動に'}</button>` +
+      `<span class="note">自動の隊: ${autoCount}/${alive}</span></div>`,
+    '<div>自動便の道:</div><div class="dests">' +
+      opts
+        .map(
+          (r, i) =>
+            `<button type="button" data-autoroute="${i}" class="${r.nodes.join('>') === cur ? 'selected' : ''}">${routeLabel(r.nodes, r.days)}</button>`,
+        )
+        .join('') +
+      '</div>',
+  ];
+  for (const card of cards) {
+    const on = state.activeCards.includes(card.id);
+    const extra = card.id === 'chukei' ? `(今の中継地: ${relay ? nodeName(relay) : 'なし'})` : '';
+    rows.push(
+      `<button type="button" class="card${on ? ' on' : ''}" data-card="${card.id}" aria-pressed="${on}">` +
+        `<span class="card-name">${on ? '◉' : '○'} ${card.name}</span><span class="card-text">${card.text}${extra}</span></button>`,
+    );
+  }
+  box.innerHTML = rows.join('');
+  $('btn-all-auto').onclick = () => {
+    const on = autoCount !== alive;
+    for (const c of state.convoys) setAuto(state, c.id, on);
+    renderPanel();
+  };
+  box.querySelectorAll<HTMLButtonElement>('[data-autoroute]').forEach((b) => {
+    b.onclick = () => {
+      const r = opts[Number(b.dataset.autoroute)];
+      if (r && setAutoRoute(state, r.nodes)) renderPanel();
+    };
+  });
+  box.querySelectorAll<HTMLButtonElement>('[data-card]').forEach((b) => {
+    b.onclick = () => {
+      const id = b.dataset.card as CardId;
+      setCardActive(state, id, !state.activeCards.includes(id));
+      renderPanel();
+    };
+  });
+}
+
 function renderHint(): void {
   const a = state.army;
   const day = currentDay(state);
   const goal = state.scenario.goalDays;
   let hint: string;
+  // 自動の隊だけで動かした場合も、最初の説明は済んだものとする
+  if (state.convoys.some((c) => c.move)) dispatchedOnce = true;
   if (!dispatchedOnce) {
     hint =
       `${t('運搬隊')}を選び、行き先に<b>前線の${t('陣')}</b>を選んで出発させてください。<br>${t('人足')}も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>`;
@@ -261,7 +320,7 @@ function renderHint(): void {
   } else if (!running && state.convoys.some((c) => c.move)) {
     hint = '▶ で時を進めます。';
   } else {
-    hint = `陣に着いた隊は、${t('帰り分')}の米を持たせないと戻れません。途中の拠点で${t('中継')}することもできます。`;
+    hint = `陣に着いた隊は、${t('帰り分')}の米を持たせないと戻れません。途中の拠点で${t('中継')}することもできます。<br>慣れてきたら、${t('ルールカード')}を選んで運搬隊を自動にできます。`;
   }
   $('hint').innerHTML = hint;
 }
@@ -273,6 +332,7 @@ function renderPanel(): void {
   $('btn-speed').textContent = `×${SPEEDS[speedIdx]}`;
   renderHint();
   renderRetreat();
+  renderCards();
 
   const box = $('convoys');
   box.innerHTML = '';
@@ -286,7 +346,8 @@ function renderPanel(): void {
       : c.move
         ? `${nodeName(c.move.route[c.move.route.length - 1]!)}へ移動中・米${fmt(c.cargo)}`
         : `${nodeName(c.at)}で待機`;
-    b.innerHTML = `<span>${i + 1}. ${c.name}(人足${c.carriers})</span><span class="st">${where}</span>`;
+    const autoTag = c.auto && !c.dropped ? '<span class="auto-tag">自動</span>' : '';
+    b.innerHTML = `<span>${i + 1}. ${c.name}(人足${c.carriers})${autoTag}</span><span class="st">${where}</span>`;
     b.onclick = () => {
       selected = c.id === selected ? null : c.id;
       dest = null;
@@ -334,7 +395,7 @@ function previewHtml(nodes: string[]): string {
 
 function currentOrderKey(): string {
   const c = selectedConvoy();
-  return [selected, dest, routeIdx, c?.at, !!c?.move, c ? state.rice[c.at] : '', state.outcome].join('|');
+  return [selected, dest, routeIdx, c?.at, !!c?.move, c?.auto, c ? state.rice[c.at] : '', state.outcome].join('|');
 }
 
 function renderOrder(): void {
@@ -347,8 +408,22 @@ function renderOrder(): void {
     return;
   }
   sec.hidden = false;
+  const autoBtn = `<div class="row"><button type="button" id="btn-auto">${c.auto ? 'この隊を手動に戻す' : 'この隊を自動にする'}</button></div>`;
+  const bindAuto = () => {
+    $('btn-auto').onclick = () => {
+      setAuto(state, c.id, !c.auto);
+      dest = null;
+      renderPanel();
+    };
+  };
+  if (c.auto) {
+    body.innerHTML = `<p class="preview">${c.name}は${t('ルールカード', 'ルールカード')}に従って自動で動いています。手動に戻すと指図できます。</p>${autoBtn}`;
+    bindAuto();
+    return;
+  }
   if (c.move) {
-    body.innerHTML = `<p class="preview">${c.name}は移動中です。着くまで指図できません。</p>`;
+    body.innerHTML = `<p class="preview">${c.name}は移動中です。着くまで指図できません。</p>${autoBtn}`;
+    bindAuto();
     return;
   }
   const sc = state.scenario;
@@ -394,7 +469,9 @@ function renderOrder(): void {
       `<button type="button" id="btn-go" class="primary">出発させる</button>`,
     );
   }
+  parts.push(autoBtn);
   body.innerHTML = parts.join('');
+  bindAuto();
 
   body.querySelectorAll<HTMLButtonElement>('[data-dest]').forEach((b) => (b.onclick = () => setDest(b.dataset.dest!)));
   body.querySelectorAll<HTMLButtonElement>('[data-route]').forEach(

@@ -143,8 +143,8 @@ describe('撤退路を選ぶ', () => {
     const plan = retreatPlan(s);
     expect(plan.need).toBe(72);
     expect(plan.stops).toEqual([
-      { id: 'toge', required: 24, have: 0 },
-      { id: 'mura', required: 0, have: 0 },
+      { id: 'toge', required: 24, have: 0, riskBuffer: 0 },
+      { id: 'mura', required: 0, have: 0, riskBuffer: 0 },
     ]);
     expect(plan.risks).toEqual([]);
   });
@@ -166,7 +166,10 @@ describe('撤退路を選ぶ', () => {
       run(s, 60);
       return s.army;
     };
-    // 河原に着いた時点の残り12の3割(3.6)を失う
+    // 河原に着いた時点の残り12の3割(3.6)を失う。見積もりの riskBuffer もこの 3.6 になる
+    const stop = retreatPlan(withRiver(1)).stops[0]!;
+    expect(stop).toMatchObject({ id: 'kawa', required: 12, have: 0 });
+    expect(stop.riskBuffer).toBeCloseTo(3.6, 9);
     expect(play(12).troops).toBeLessThan(24);
     expect(play(12 + 3.6).troops).toBe(24);
   });
