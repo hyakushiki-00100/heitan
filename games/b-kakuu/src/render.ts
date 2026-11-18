@@ -1,4 +1,4 @@
-import { armyPosition, convoyPosition, daysLeft, nodeConsumptionPerDay, type MapNode, type SimState } from '@hyoro/core';
+import { armyPosition, convoyPosition, frontDaysLeft, goodsOf, type MapNode, type SimState } from '@hyoro/core';
 
 const C = {
   paper: '#f4efe4',
@@ -136,18 +136,35 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const rice = state.rice[n.id] ?? 0;
     ctx.font = '12px serif';
     ctx.fillText(`米${fmt(rice)}`, p.x, p.y);
-    const left = daysLeft(rice, nodeConsumptionPerDay(state, n.id));
+    // 円の下に行を積む: あと何日 → 撤退用の置き米 → 物資の量
+    let below = p.y + NODE_R + 12;
+    const left = frontDaysLeft(state, n.id).days;
     if (left !== null) {
       ctx.font = 'bold 13px serif';
       ctx.fillStyle = daysLeftColor(left);
-      ctx.fillText(`あと${left.toFixed(1)}日`, p.x, p.y + NODE_R + 12);
+      ctx.fillText(`あと${left.toFixed(1)}日`, p.x, below);
+      below += 15;
     }
     const stop = hl.stops.find((x) => x.id === n.id);
     if (stop && stop.required > 0) {
       const ok = stop.have + 1e-9 >= stop.required;
       ctx.font = 'bold 12px serif';
       ctx.fillStyle = ok ? C.ok : C.bad;
-      ctx.fillText(`撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, p.y + NODE_R + 12);
+      ctx.fillText(`撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, below);
+      below += 15;
+    }
+    const goodsText = goodsOf(sc)
+      .map((g) => ({ g, v: state.goods[g.id]![n.id] ?? 0 }))
+      .filter((x) => x.v > 1e-9)
+      .map((x) => `${x.g.name}${fmt(x.v)}`)
+      .join(' ');
+    if (goodsText) {
+      // 待機中の隊の印(拠点の周り、半径 NODE_R+12 に置く)と重ならないよう、その外側に書く
+      const idleHere = state.convoys.some((c) => !c.move && !c.dropped && c.at === n.id);
+      if (idleHere) below = Math.max(below, p.y + NODE_R + 12 + 10 + 12);
+      ctx.font = '11px serif';
+      ctx.fillStyle = C.ink2;
+      ctx.fillText(goodsText, p.x, below);
     }
   }
 

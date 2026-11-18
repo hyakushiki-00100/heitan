@@ -18,8 +18,10 @@ export interface Convoy {
   carriers: number;
   /** 今いる拠点(移動中は最後に通った拠点) */
   at: string;
-  /** 積んでいる米 */
+  /** 積んでいる米(人足が道中で食べるのはこの米) */
   cargo: number;
+  /** 積んでいる米以外の物資(物資ID → 量) */
+  goods: Record<string, number>;
   /** 移動中なら状態、止まっていれば null */
   move: Move | null;
   /** 道中で食料が尽きて離脱した(もう動かせない) */
@@ -41,7 +43,12 @@ export interface Army {
   /** 兵1人が撤退時に持てる米 */
   capacityPer: number;
   at: string;
+  /** 撤退中に持っている米 */
   cargo: number;
+  /** 撤退中に持っている米以外の物資 */
+  goods: Record<string, number>;
+  /** 塩・味噌などが足りずに「体を壊す」端数(1たまるごとに1人離脱) */
+  healthDebt: number;
   move: Move | null;
   /** 撤退路(陣→蔵のノード列)。保持中はプレイヤーが選び直せる */
   retreatNodes: string[];
@@ -61,7 +68,7 @@ export function eatenOver(convoy: Convoy, carrierRation: number, days: number): 
   return convoy.carriers * carrierRation * days;
 }
 
-/** 軍勢が撤退時に持てる上限 */
+/** 軍勢が撤退時に持てる上限(米と物資の合計) */
 export function armyCapacity(army: Army): number {
   return army.troops * army.capacityPer;
 }

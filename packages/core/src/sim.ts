@@ -8,8 +8,26 @@ import { armyCapacity, eatenOver, maxLoad, type Army, type Convoy, type Move } f
 export interface NodeSetup {
   /** 初期の米 */
   rice: number;
-  /** 毎日の消費(軍勢の分とは別)。省略は0 */
+  /** 初期の米以外の物資(物資ID → 量)。省略は0 */
+  goods?: Record<string, number>;
+  /** 毎日の米の消費(軍勢の分とは別)。省略は0 */
   consumptionPerDay?: number;
+}
+
+/**
+ * 米以外の物資の働き。
+ * cook: 欠けると米があっても食べられない(薪)。米が尽きたのと同じ扱い
+ * health: 欠けるとすぐには困らないが、不足が続くと兵が体を壊して少しずつ離脱する(塩・味噌)
+ */
+export type GoodKind = 'cook' | 'health';
+
+/** 米以外の物資。兵だけが使う(人足は米だけを食べ、薪は道中で拾える、という簡略化) */
+export interface GoodDef {
+  id: string;
+  name: string;
+  kind: GoodKind;
+  /** 兵1人が1日に使う量 */
+  perTroopPerDay: number;
 }
 
 export interface ArmySetup {
@@ -24,6 +42,11 @@ export interface ArmySetup {
    * 1にすると「足りなければ即全員離脱」になり、少しの不足でも全滅するので厳しすぎる。
    */
   hungerDropRate?: number;
+  /**
+   * health の物資が足りないとき、兵のうち1日に体を壊して離脱する割合(不足の割合を掛ける)。省略時 0.02。
+   * 端数は持ち越すので、少しの不足でも長く続けば離脱が出る
+   */
+  healthDropPerDay?: number;
 }
 
 /** ルールカードの種類(動きはコード側で決まっていて、数値だけデータで変えられる) */
@@ -63,6 +86,8 @@ export interface Scenario {
   scoring?: Scoring;
   /** このシナリオで使えるルールカード。省略は無し */
   cards?: CardDef[];
+  /** 米以外の物資。省略は米だけ */
+  goods?: GoodDef[];
 }
 
 /** playing=進行中 / done=撤退まで終えた / lost=陣の兵糧が尽きた */
@@ -76,7 +101,10 @@ export interface LogEntry {
 export interface SimState {
   scenario: Scenario;
   step: number;
+  /** 拠点ごとの米 */
   rice: Record<string, number>;
+  /** 米以外の物資: 物資ID → 拠点ID → 量 */
+  goods: Record<string, Record<string, number>>;
   convoys: Convoy[];
   army: Army;
   log: LogEntry[];
@@ -111,9 +139,20 @@ export function validateScenario(sc: Scenario): void {
       throw new Error(`道の日数は1刻み(${sc.stepDays}日)の倍数にする: ${l.a}-${l.b} ${l.days}日`);
     }
   }
+  const goodIds = new Set<string>();
+  for (const g of sc.goods ?? []) {
+    if (g.id === 'rice' || goodIds.has(g.id)) throw new Error(`物資IDが重複: ${g.id}`);
+    goodIds.add(g.id);
+    if (g.kind !== 'cook' && g.kind !== 'health') throw new Error(`物資の働きが不正: ${g.id}`);
+    if (!(g.perTroopPerDay >= 0)) throw new Error(`物資の消費は0以上: ${g.id}`);
+  }
   for (const [id, n] of Object.entries(sc.nodes)) {
     if (!ids.has(id)) throw new Error(`nodes に地図にない拠点: ${id}`);
     if (!(n.rice >= 0)) throw new Error(`米は0以上: ${id}`);
+    for (const [g, v] of Object.entries(n.goods ?? {})) {
+      if (!goodIds.has(g)) throw new Error(`知らない物資: ${id}.${g}`);
+      if (!(v >= 0)) throw new Error(`物資は0以上: ${id}.${g}`);
+    }
     if (n.consumptionPerDay !== undefined && !(n.consumptionPerDay >= 0)) throw new Error(`消費は0以上: ${id}`);
   }
   const cids = new Set<string>();
@@ -138,6 +177,29 @@ export function validateScenario(sc: Scenario): void {
   if (a.hungerDropRate !== undefined && !(a.hungerDropRate > 0 && a.hungerDropRate <= 1)) {
     throw new Error('hungerDropRate は0より大きく1以下');
   }
+  if (a.healthDropPerDay !== undefined && !(a.healthDropPerDay >= 0 && a.healthDropPerDay <= 1)) {
+    throw new Error('healthDropPerDay は0以上1以下');
+  }
+}
+
+/** シナリオの米以外の物資(無ければ空) */
+export function goodsOf(sc: Scenario): GoodDef[] {
+  return sc.goods ?? [];
+}
+
+/** 物資の量の合計(重さ。どの物資も1単位=1) */
+export function goodsWeight(g: Record<string, number>): number {
+  let w = 0;
+  for (const v of Object.values(g)) w += v;
+  return w;
+}
+
+/** 軍勢が1日に使う量(米と物資ごと)。今の兵数で */
+export function armyDailyNeed(state: SimState): { rice: number; goods: Record<string, number> } {
+  const a = state.army;
+  const goods: Record<string, number> = {};
+  for (const g of goodsOf(state.scenario)) goods[g.id] = a.troops * g.perTroopPerDay;
+  return { rice: a.troops * a.ration, goods };
 }
 
 /** 日数最短の道(同じ日数なら candidateRoutes と同じ順で決める) */
@@ -153,12 +215,19 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
   validateScenario(scenario);
   const rice: Record<string, number> = {};
   for (const n of scenario.map.nodes) rice[n.id] = scenario.nodes[n.id]?.rice ?? 0;
+  const goods: Record<string, Record<string, number>> = {};
+  const emptyGoods = () => Object.fromEntries(goodsOf(scenario).map((g) => [g.id, 0])) as Record<string, number>;
+  for (const g of goodsOf(scenario)) {
+    goods[g.id] = {};
+    for (const n of scenario.map.nodes) goods[g.id]![n.id] = scenario.nodes[n.id]?.goods?.[g.id] ?? 0;
+  }
   const a = scenario.army;
   return {
     scenario,
     step: 0,
     rice,
-    convoys: scenario.convoys.map((c) => ({ ...c, cargo: 0, move: null, dropped: false, auto: false })),
+    goods,
+    convoys: scenario.convoys.map((c) => ({ ...c, cargo: 0, goods: emptyGoods(), move: null, dropped: false, auto: false })),
     army: {
       troops: a.troops,
       troopsTotal: a.troops,
@@ -166,6 +235,8 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
       capacityPer: a.capacityPer,
       at: scenario.frontId,
       cargo: 0,
+      goods: emptyGoods(),
+      healthDebt: 0,
       move: null,
       retreatNodes: defaultRoute(scenario, scenario.frontId, scenario.depotId)!.nodes,
       phase: 'hold',
@@ -259,8 +330,16 @@ const r1 = (v: number): string => (Number.isInteger(v) ? String(v) : v.toFixed(1
 
 export type DispatchResult = { ok: true; route: Route } | { ok: false; error: string };
 
+/** 積み荷の説明(例: 米50・薪10) */
+function cargoText(state: SimState, rice: number, goods: Record<string, number>): string {
+  const parts = [`米${r1(rice)}`];
+  for (const g of goodsOf(state.scenario)) if ((goods[g.id] ?? 0) > EPS) parts.push(`${g.name}${r1(goods[g.id]!)}`);
+  return parts.join('・');
+}
+
 /**
- * 運搬隊を出発させる。load は拠点の米から積む量。
+ * 運搬隊を出発させる。load は拠点の米から積む量、goods は米以外の物資(物資ID → 量)。
+ * 積める上限は米と物資の合計にかかる。
  * routeNodes を渡すとその道を通る(出発点と行き先が合っていること)。省略時は日数最短の道。
  */
 export function dispatch(
@@ -269,6 +348,7 @@ export function dispatch(
   destId: string,
   load: number,
   routeNodes?: string[],
+  goods: Record<string, number> = {},
 ): DispatchResult {
   if (state.outcome !== 'playing') return { ok: false, error: '遠征は終わっています' };
   const convoy = state.convoys.find((c) => c.id === convoyId);
@@ -282,15 +362,28 @@ export function dispatch(
     return { ok: false, error: '道の出発点か行き先が合っていません' };
   }
   if (!(load >= 0)) return { ok: false, error: '積み荷が不正です' };
+  const defs = goodsOf(state.scenario);
+  for (const [id, v] of Object.entries(goods)) {
+    const def = defs.find((g) => g.id === id);
+    if (!def) return { ok: false, error: `知らない物資です: ${id}` };
+    if (!(v >= 0)) return { ok: false, error: '積み荷が不正です' };
+    const haveG = state.goods[id]![convoy.at] ?? 0;
+    if (v > haveG + EPS) return { ok: false, error: `拠点の${def.name}(${r1(haveG)})が足りません` };
+  }
   const cap = maxLoad(convoy, state.scenario.carrierCapacity);
-  if (load > cap + EPS) return { ok: false, error: `積載上限(${cap})を超えています` };
+  if (load + goodsWeight(goods) > cap + EPS) return { ok: false, error: `積載上限(${cap})を超えています` };
   const have = state.rice[convoy.at] ?? 0;
   if (load > have + EPS) return { ok: false, error: `拠点の米(${r1(have)})が足りません` };
 
   state.rice[convoy.at] = clean(have - load);
   convoy.cargo = load;
+  for (const g of defs) {
+    const v = goods[g.id] ?? 0;
+    state.goods[g.id]![convoy.at] = clean((state.goods[g.id]![convoy.at] ?? 0) - v);
+    convoy.goods[g.id] = v;
+  }
   convoy.move = startMove(state.scenario, route.nodes);
-  addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}を出発(米${r1(load)})`);
+  addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}を出発(${cargoText(state, load, goods)})`);
   return { ok: true, route };
 }
 
@@ -341,20 +434,39 @@ export function tripPreview(state: SimState, convoy: Convoy, nodes: string[], lo
  * 区間 from→to を通り抜けたときの危険の判定。起きたら積み荷を減らし、失った量を返す。
  * 乱数は state.rng から引くので、同じシード・同じ操作なら同じ結果になる。
  */
-function applyRisk(state: SimState, from: string, to: string, holder: { cargo: number }, who: string, isConvoy: boolean): number {
+function applyRisk(
+  state: SimState,
+  from: string,
+  to: string,
+  holder: { cargo: number; goods: Record<string, number> },
+  who: string,
+  isConvoy: boolean,
+): number {
   const link = findLink(state.scenario.map, from, to);
   if (!link?.risk) return 0;
   const chance = isConvoy ? convoyRiskChance(state, link.risk) : link.risk.chance;
   if (chance <= 0) return 0;
   if (state.rng.next() >= chance) return 0;
-  const lost = holder.cargo * link.risk.loss;
+  const loss = link.risk.loss;
+  const lost = holder.cargo * loss;
   holder.cargo = clean(holder.cargo - lost);
-  if (lost > 0) addLog(state, `${who}は${link.risk.label}で荷の${Math.round(link.risk.loss * 100)}%(米${r1(lost)})を失った`);
-  return lost;
+  const lostGoods: Record<string, number> = {};
+  for (const id of Object.keys(holder.goods)) {
+    lostGoods[id] = holder.goods[id]! * loss;
+    holder.goods[id] = clean(holder.goods[id]! - lostGoods[id]!);
+  }
+  const total = lost + goodsWeight(lostGoods);
+  if (total > 0) addLog(state, `${who}は${link.risk.label}で荷の${Math.round(loss * 100)}%(${cargoText(state, lost, lostGoods)})を失った`);
+  return total;
 }
 
 export interface RetreatPlan {
   route: Route;
+  /**
+   * 米と物資の割合(1日に使う量の比)。need・capacity・fromFront・stops は米と物資の合計(重さ)で、
+   * 物資ごとの量はこの割合を掛けて求める。米だけのシナリオなら { rice: 1 }
+   */
+  shares: Record<string, number>;
   /** 撤退路の危険(見積もりには入れていない。起きれば足りなくなる) */
   risks: { a: string; b: string; risk: LinkRisk }[];
   /** 撤退に必要な米の合計(今の兵数で) */
@@ -365,6 +477,7 @@ export interface RetreatPlan {
   fromFront: number;
   /**
    * 途中の拠点に置いておくべき量(足りている分は0)。
+   * have は、その拠点にある米と物資を割合どおりに揃えたときの量(いちばん足りない物資で決まる)。
    * riskBuffer は、その拠点に入る直前の区間に危険がある場合に、危険が起きても足りるよう上乗せしたい量
    */
   stops: { id: string; required: number; have: number; riskBuffer: number }[];
@@ -375,12 +488,36 @@ export interface RetreatPlan {
  * 途中の拠点で「上限まで、または残りの道のりに要る分まで」補給する前提で、
  * 各拠点に置いておくべき量を求める。
  */
+/** 拠点にある米と物資(物資ID → 量。米は 'rice') */
+export function nodeAmounts(state: SimState, id: string): Record<string, number> {
+  const out: Record<string, number> = { rice: state.rice[id] ?? 0 };
+  for (const g of goodsOf(state.scenario)) out[g.id] = state.goods[g.id]![id] ?? 0;
+  return out;
+}
+
+/** 米と物資を shares の割合で揃えたとき、何単位分あるか(いちばん足りないもので決まる) */
+function setsOf(amounts: Record<string, number>, shares: Record<string, number>): number {
+  let n = Infinity;
+  for (const [id, sh] of Object.entries(shares)) if (sh > 0) n = Math.min(n, (amounts[id] ?? 0) / sh);
+  return n === Infinity ? 0 : n;
+}
+
+/** 撤退で使う米と物資の割合 */
+function retreatShares(state: SimState): Record<string, number> {
+  const d = armyDailyNeed(state);
+  const total = d.rice + goodsWeight(d.goods);
+  const shares: Record<string, number> = { rice: total > 0 ? d.rice / total : 1 };
+  for (const [id, v] of Object.entries(d.goods)) shares[id] = total > 0 ? v / total : 0;
+  return shares;
+}
+
 export function retreatPlan(state: SimState): RetreatPlan {
   const sc = state.scenario;
-  const a = state.army;
   const route = retreatRoute(state);
-  const perDay = a.troops * a.ration;
-  const capacity = armyCapacity(a);
+  const daily = armyDailyNeed(state);
+  const perDay = daily.rice + goodsWeight(daily.goods);
+  const shares = retreatShares(state);
+  const capacity = armyCapacity(state.army);
   const need = perDay * route.days;
   const legDays: number[] = [];
   for (let i = 0; i + 1 < route.nodes.length; i++) legDays.push(findLink(sc.map, route.nodes[i]!, route.nodes[i + 1]!)!.days);
@@ -400,10 +537,10 @@ export function retreatPlan(state: SimState): RetreatPlan {
     const risk = findLink(sc.map, route.nodes[i]!, id)!.risk;
     // 危険が起きると、着いた時点の手持ちの loss 割合を失う。その分を置き米に足せば足りる
     const riskBuffer = risk && required > 0 ? clean(Math.min(arriving, target) * risk.loss) : 0;
-    stops.push({ id, required, have: state.rice[id] ?? 0, riskBuffer });
+    stops.push({ id, required, have: setsOf(nodeAmounts(state, id), shares), riskBuffer });
     cargo = Math.max(cargo, target);
   }
-  return { route, risks: routeRisks(sc.map, route.nodes), need, capacity, fromFront, stops };
+  return { route, shares, risks: routeRisks(sc.map, route.nodes), need, capacity, fromFront, stops };
 }
 
 /** 移動中の Move の、終点までの残り日数(区間の途中なら残り刻みで数える) */
@@ -414,17 +551,33 @@ export function remainingDays(sc: Scenario, mv: Move): number {
 }
 
 /**
- * 軍勢が拠点で受け取る量。持てる上限と「残りの道のりに要る分」の小さい方まで。
+ * 軍勢が拠点で受け取る。米と物資それぞれ「残りの道のりに要る分」まで受け取り、
+ * 合計が持てる上限を超えるなら、どれも同じ割合で減らす。
  * 要る分を超えては受け取らない(多く置いた分はその場に残り、余剰として減点される)。
+ * 受け取った量(米, 物資)を返す
  */
-function armyPickup(state: SimState, nodeId: string, remainingNeed: number): number {
+function armyPickup(state: SimState, nodeId: string, days: number): { rice: number; goods: Record<string, number> } {
   const a = state.army;
-  const target = Math.min(armyCapacity(a), remainingNeed);
-  const pick = Math.min(Math.max(0, target - a.cargo), state.rice[nodeId] ?? 0);
-  if (pick <= EPS) return 0;
-  state.rice[nodeId] = clean((state.rice[nodeId] ?? 0) - pick);
-  a.cargo += pick;
-  return pick;
+  const d = armyDailyNeed(state);
+  const want: Record<string, number> = {
+    rice: Math.min(Math.max(0, d.rice * days - a.cargo), state.rice[nodeId] ?? 0),
+  };
+  for (const g of goodsOf(state.scenario)) {
+    want[g.id] = Math.min(Math.max(0, (d.goods[g.id] ?? 0) * days - (a.goods[g.id] ?? 0)), state.goods[g.id]![nodeId] ?? 0);
+  }
+  const room = Math.max(0, armyCapacity(a) - a.cargo - goodsWeight(a.goods));
+  const total = goodsWeight(want);
+  const scale = total > room ? room / total : 1;
+  const got = { rice: clean(want.rice! * scale), goods: {} as Record<string, number> };
+  state.rice[nodeId] = clean((state.rice[nodeId] ?? 0) - got.rice);
+  a.cargo += got.rice;
+  for (const g of goodsOf(state.scenario)) {
+    const v = clean(want[g.id]! * scale);
+    got.goods[g.id] = v;
+    state.goods[g.id]![nodeId] = clean((state.goods[g.id]![nodeId] ?? 0) - v);
+    a.goods[g.id] = (a.goods[g.id] ?? 0) + v;
+  }
+  return got;
 }
 
 /** 撤退中の軍勢が蔵に着くまでの残り日数。撤退中でなければ null */
@@ -469,12 +622,12 @@ function startRetreat(state: SimState): void {
   const before = state.rice[a.at] ?? 0;
   const usable = Math.max(0, before - keep);
   state.rice[a.at] = usable;
-  const take = armyPickup(state, a.at, a.troops * a.ration * remainingDays(sc, a.move));
+  const take = armyPickup(state, a.at, remainingDays(sc, a.move));
   state.rice[a.at] = clean((state.rice[a.at] ?? 0) + (before - usable));
   a.phase = 'retreat';
   addLog(
     state,
-    `${sc.goalDays}日間、${nodeName(state, a.at)}を保った。撤退を始める(兵${a.troops}人・米${r1(take)}` +
+    `${sc.goalDays}日間、${nodeName(state, a.at)}を保った。撤退を始める(兵${a.troops}人・${cargoText(state, take.rice, take.goods)}` +
       (keep > 0 ? `。運搬隊の帰り分${r1(Math.min(keep, before))}は残した)` : ')'),
   );
 }
@@ -486,27 +639,29 @@ function stepArmy(state: SimState): void {
   const mv = a.move;
   if (a.phase !== 'retreat' || !mv) return;
 
-  const perSoldier = a.ration * sc.stepDays;
-  const need = a.troops * perSoldier;
-  if (a.cargo + EPS >= need) {
-    a.cargo = clean(a.cargo - need);
-  } else {
-    // 食べられる分だけ食べ、食べられなかった兵の一部が離脱する
-    const fed = Math.floor((a.cargo + EPS) / perSoldier);
+  const pool: FoodPool = {
+    get: (id) => (id === 'rice' ? a.cargo : (a.goods[id] ?? 0)),
+    set: (id, v) => {
+      if (id === 'rice') a.cargo = v;
+      else a.goods[id] = v;
+    },
+  };
+  const fed = feedArmy(state, pool);
+  if (fed < a.troops) {
+    // 食べられなかった兵の一部が離脱する
     const unfed = a.troops - fed;
     const rate = sc.army.hungerDropRate ?? 0.25;
     const out = Math.min(unfed, Math.ceil(unfed * rate - EPS));
-    a.cargo = clean(a.cargo - fed * perSoldier);
     a.troops -= out;
     a.dropped += out;
-    addLog(state, `撤退中に兵糧が足りず、兵${unfed}人が食べられなかった。うち${out}人が離脱した`);
-    if (a.troops === 0) {
-      a.phase = 'gone';
-      a.at = mv.route[mv.leg]!;
-      a.move = null;
-      addLog(state, '軍勢は散り散りになった');
-      return;
-    }
+    addLog(state, `撤退中に${shortNames(state, pool)}が足りず、兵${unfed}人が食べられなかった。うち${out}人が離脱した`);
+  }
+  if (a.troops === 0) {
+    a.phase = 'gone';
+    a.at = mv.route[mv.leg]!;
+    a.move = null;
+    addLog(state, '軍勢は散り散りになった');
+    return;
   }
 
   const from = mv.route[mv.leg]!;
@@ -516,16 +671,82 @@ function stepArmy(state: SimState): void {
   applyRisk(state, from, reached, a, '軍勢', false);
   if (finished) {
     state.rice[reached] = (state.rice[reached] ?? 0) + a.cargo;
-    addLog(state, `軍勢が${nodeName(state, reached)}に戻った(兵${a.troops}人・残りの米${r1(a.cargo)}を納めた)`);
+    for (const g of goodsOf(sc)) state.goods[g.id]![reached] = (state.goods[g.id]![reached] ?? 0) + (a.goods[g.id] ?? 0);
+    addLog(state, `軍勢が${nodeName(state, reached)}に戻った(兵${a.troops}人・残りの${cargoText(state, a.cargo, a.goods)}を納めた)`);
     a.cargo = 0;
+    for (const g of goodsOf(sc)) a.goods[g.id] = 0;
     a.move = null;
     a.phase = 'home';
     return;
   }
-  const pick = armyPickup(state, reached, a.troops * a.ration * remainingDays(sc, mv));
-  if (pick > 0) {
-    addLog(state, `軍勢が${nodeName(state, reached)}で米${r1(pick)}を受け取った`);
+  const pick = armyPickup(state, reached, remainingDays(sc, mv));
+  if (pick.rice + goodsWeight(pick.goods) > 0) {
+    addLog(state, `軍勢が${nodeName(state, reached)}で${cargoText(state, pick.rice, pick.goods)}を受け取った`);
   }
+}
+
+/** 軍勢が食べる元(陣の蔵、または撤退中の手持ち)。'rice' は米 */
+interface FoodPool {
+  get(id: string): number;
+  set(id: string, v: number): void;
+}
+
+/** 足りない物の名前(米と cook の物資のうち、半日分に満たないもの) */
+function shortNames(state: SimState, pool: FoodPool): string {
+  const a = state.army;
+  const dt = state.scenario.stepDays;
+  const names: string[] = [];
+  if (pool.get('rice') + EPS < a.ration * dt) names.push('兵糧');
+  for (const g of goodsOf(state.scenario)) {
+    if (g.kind === 'cook' && pool.get(g.id) + EPS < g.perTroopPerDay * dt) names.push(g.name);
+  }
+  return names.length ? names.join('と') : '兵糧';
+}
+
+/**
+ * 軍勢に半日分を食べさせ、食べられた兵の数を返す。
+ * 米と cook の物資(薪)は1人分ずつ揃わないと食べられない。揃った人数だけ食べ、その分を減らす。
+ * health の物資(塩・味噌)は、足りない割合に応じて「体を壊す」端数をためて、1人分たまるごとに離脱させる
+ */
+function feedArmy(state: SimState, pool: FoodPool): number {
+  const sc = state.scenario;
+  const a = state.army;
+  const dt = sc.stepDays;
+  let fed = a.troops;
+  const perRice = a.ration * dt;
+  if (perRice > 0) fed = Math.min(fed, Math.floor((pool.get('rice') + EPS) / perRice));
+  for (const g of goodsOf(sc)) {
+    const per = g.perTroopPerDay * dt;
+    if (g.kind === 'cook' && per > 0) fed = Math.min(fed, Math.floor((pool.get(g.id) + EPS) / per));
+  }
+  pool.set('rice', clean(pool.get('rice') - fed * perRice));
+  for (const g of goodsOf(sc)) {
+    if (g.kind === 'cook') pool.set(g.id, clean(pool.get(g.id) - fed * g.perTroopPerDay * dt));
+  }
+  // health の物資: 食べた兵の分だけ使う。足りなければ不足の割合だけ体を壊す端数がたまる
+  let shortFrac = 0;
+  for (const g of goodsOf(sc)) {
+    if (g.kind !== 'health') continue;
+    const need = fed * g.perTroopPerDay * dt;
+    if (need <= 0) continue;
+    const have = pool.get(g.id);
+    const use = Math.min(have, need);
+    pool.set(g.id, clean(have - use));
+    shortFrac = Math.max(shortFrac, 1 - use / need);
+  }
+  if (shortFrac > EPS) {
+    a.healthDebt += fed * (sc.army.healthDropPerDay ?? 0.02) * dt * shortFrac;
+    const out = Math.min(a.troops, Math.floor(a.healthDebt + EPS));
+    if (out > 0) {
+      a.healthDebt -= out;
+      a.troops -= out;
+      a.dropped += out;
+      const names = goodsOf(sc).filter((g) => g.kind === 'health').map((g) => g.name).join('・');
+      addLog(state, `${names}が足りず、兵${out}人が体を壊して離脱した`);
+      return Math.min(fed, a.troops);
+    }
+  }
+  return fed;
 }
 
 /** 1刻み(既定は半日)進める。 */
@@ -542,6 +763,7 @@ export function step(state: SimState): void {
     if (convoy.cargo + EPS < need) {
       addLog(state, `${convoy.name}は道中で食料が尽き、人足が離脱した(積み荷は失われた)`);
       convoy.cargo = 0;
+      for (const id of Object.keys(convoy.goods)) convoy.goods[id] = 0;
       convoy.at = mv.route[mv.leg]!;
       convoy.move = null;
       convoy.dropped = true;
@@ -556,8 +778,12 @@ export function step(state: SimState): void {
     }
     if (finished) {
       state.rice[convoy.at] = (state.rice[convoy.at] ?? 0) + convoy.cargo;
-      addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}に到着(米${r1(convoy.cargo)}を納めた)`);
+      for (const g of goodsOf(sc)) {
+        state.goods[g.id]![convoy.at] = (state.goods[g.id]![convoy.at] ?? 0) + (convoy.goods[g.id] ?? 0);
+      }
+      addLog(state, `${convoy.name}が${nodeName(state, convoy.at)}に到着(${cargoText(state, convoy.cargo, convoy.goods)}を納めた)`);
       convoy.cargo = 0;
+      for (const g of goodsOf(sc)) convoy.goods[g.id] = 0;
       convoy.move = null;
     }
   }
@@ -565,15 +791,24 @@ export function step(state: SimState): void {
   // 2. 軍勢: 保持中は陣の米を食べる。撤退中は持っている米を食べて進む
   const a = state.army;
   if (a.phase === 'hold') {
-    const use = a.troops * a.ration * sc.stepDays;
-    const have = state.rice[a.at] ?? 0;
-    if (have + EPS < use) {
-      state.rice[a.at] = 0;
+    const at = a.at;
+    const pool: FoodPool = {
+      get: (id) => (id === 'rice' ? (state.rice[at] ?? 0) : (state.goods[id]![at] ?? 0)),
+      set: (id, v) => {
+        if (id === 'rice') state.rice[at] = v;
+        else state.goods[id]![at] = v;
+      },
+    };
+    const troopsBefore = a.troops;
+    const fed = feedArmy(state, pool);
+    // 体を壊して離脱した分を除いても、食べられない兵がいれば陣は保てない
+    if (fed < Math.min(troopsBefore, a.troops)) {
+      const what = shortNames(state, pool);
+      state.rice[at] = 0;
       state.outcome = 'lost';
-      addLog(state, `${nodeName(state, a.at)}の兵糧が尽きた。遠征は失敗`);
+      addLog(state, `${nodeName(state, at)}の${what}が尽きた。遠征は失敗`);
       return;
     }
-    state.rice[a.at] = clean(have - use);
   } else {
     stepArmy(state);
   }

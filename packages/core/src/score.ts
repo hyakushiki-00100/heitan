@@ -16,9 +16,10 @@ export interface ExpeditionResult {
   troopsTotal: number;
   carriersHome: number;
   carriersTotal: number;
-  /** 蔵以外に残った米(村への負担・米価の上昇) */
+  /** 蔵以外に残った米と物資の合計(村への負担・米価の上昇) */
   surplus: number;
-  surplusByNode: { id: string; rice: number }[];
+  /** 拠点ごとの余剰(米と物資の合計) */
+  surplusByNode: { id: string; amount: number }[];
   score: number;
 }
 
@@ -34,13 +35,14 @@ export function evaluate(state: SimState): ExpeditionResult {
   for (const c of state.convoys) {
     carriersTotal += c.carriers;
     if (!c.dropped && !c.move && c.at === sc.depotId) carriersHome += c.carriers;
-    surplus += c.cargo;
+    surplus += c.cargo + Object.values(c.goods).reduce((a, b) => a + b, 0);
   }
-  const surplusByNode: { id: string; rice: number }[] = [];
+  const surplusByNode: { id: string; amount: number }[] = [];
   for (const n of sc.map.nodes) {
     if (n.id === sc.depotId) continue;
-    const r = state.rice[n.id] ?? 0;
-    if (r > 0) surplusByNode.push({ id: n.id, rice: r });
+    let r = state.rice[n.id] ?? 0;
+    for (const g of Object.values(state.goods)) r += g[n.id] ?? 0;
+    if (r > 0) surplusByNode.push({ id: n.id, amount: r });
     surplus += r;
   }
   const score = held ? (troopsHome + carriersHome) * scoring.perPerson - surplus * scoring.perSurplus : 0;

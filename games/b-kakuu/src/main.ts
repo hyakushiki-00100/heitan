@@ -5,10 +5,11 @@ import {
   currentDay,
   daysLeft,
   dispatch,
-  eatenOver,
   evaluate,
+  frontDaysLeft,
+  goodsOf,
   maxLoad,
-  nodeConsumptionPerDay,
+  nodeAmounts,
   retreatPlan,
   relayNode,
   setAuto,
@@ -22,11 +23,19 @@ import {
   type SimState,
 } from '@hyoro/core';
 import { loadJson, saveJson } from '@hyoro/platform';
-import scenarioJson from '../data/scenario-01.json';
+import scenario01 from '../data/scenario-01.json';
+import scenario02 from '../data/scenario-02.json';
 import { setupGlossary, t } from './glossary';
 import { daysLeftColor, draw, fmt, hitNode, type View } from './render';
 
-const scenario = scenarioJson as unknown as Scenario;
+const SCENARIOS = [scenario01, scenario02] as unknown as Scenario[];
+
+/** URL の ?s= で選んだシナリオ。なければ1本目 */
+function pickScenario(): Scenario {
+  const q = new URLSearchParams(location.search).get('s');
+  return SCENARIOS.find((x) => x.id === q) ?? SCENARIOS[0]!;
+}
+let scenario = pickScenario();
 /** 1刻み(半日)を何ミリ秒で進めるか(×1のとき) */
 const STEP_MS = 1200;
 const SPEEDS = [1, 2, 4];
@@ -43,7 +52,10 @@ let acc = 0;
 let last = performance.now();
 let selected: string | null = null;
 let dest: string | null = null;
+/** 積む米 */
 let load = 0;
+/** 積む米以外の物資(物資ID → 量) */
+let goodsLoad: Record<string, number> = {};
 /** 選んでいる道の候補番号(candidateRoutes の何番目か) */
 let routeIdx = 0;
 let dispatchedOnce = false;
@@ -135,7 +147,17 @@ function setDest(id: string): void {
   if (!c || c.move || id === c.at) return;
   dest = id;
   routeIdx = 0;
+  goodsLoad = {};
   load = Math.min(maxLoad(c, state.scenario.carrierCapacity), state.rice[c.at] ?? 0);
+  // 物資のあるシナリオで、陣か撤退路の置き場所へ運ぶなら、最初から陣の割合で積む(薪の積み忘れを防ぐ)
+  const sc = state.scenario;
+  const isStop = state.army.phase === 'hold' && retreatPlan(state).stops.some((x) => x.id === id && x.required > 0);
+  const route = currentRoute();
+  if (goodsOf(sc).length && route && (id === sc.frontId || isStop)) {
+    const m = mixLoad(route.nodes);
+    load = m.rice;
+    goodsLoad = m.goods;
+  }
   renderPanel();
   // スマホでは出発ボタンが画面外に出やすいので、見える位置までスクロールする
   document.getElementById('btn-go')?.scrollIntoView({ block: 'nearest' });
@@ -181,18 +203,39 @@ function tick(now: number): void {
 }
 
 // ---- パネル ----
+/** 米と物資の量の説明(例: 米50・薪10)。物資のないシナリオでは米だけ */
+function amountsText(rice: number, goods: Record<string, number>): string {
+  const parts = [`米${fmt(rice)}`];
+  for (const g of goodsOf(state.scenario)) if ((goods[g.id] ?? 0) > EPS) parts.push(`${g.name}${fmt(goods[g.id]!)}`);
+  return parts.join('・');
+}
+
+/** 合計 w を、撤退の割合で米と物資に分けた説明 */
+function splitText(w: number, shares: Record<string, number>): string {
+  if (!goodsOf(state.scenario).length) return '';
+  const goods: Record<string, number> = {};
+  for (const g of goodsOf(state.scenario)) goods[g.id] = w * (shares[g.id] ?? 0);
+  return `(${amountsText(w * (shares.rice ?? 0), goods)})`;
+}
+
 function renderClock(): void {
   const sc = state.scenario;
   const day = currentDay(state);
   const a = state.army;
   let html = `第 <b>${fmt(day)}</b> 日 ・ `;
   if (a.phase === 'hold') {
-    const left = daysLeft(state.rice[a.at] ?? 0, nodeConsumptionPerDay(state, a.at)) ?? 0;
+    const d = frontDaysLeft(state, a.at);
+    const left = d.days ?? 0;
+    const by = goodsOf(sc).length ? `(${d.limiting})` : '';
     html +=
       `撤退開始まで ${fmt(Math.max(0, sc.goalDays - day))}日 ・ ${nodeName(a.at)} ` +
-      `<b style="color:${daysLeftColor(left)}">${t('あと何日分', `あと${left.toFixed(1)}日分`)}</b>`;
+      `<b style="color:${daysLeftColor(left)}">${t('あと何日分', `あと${left.toFixed(1)}日分${by}`)}</b>`;
+    for (const h of d.health) {
+      // 米・薪より先に尽きるときだけ出す(同じ日数なら出さない。0.05日は浮動小数の誤差よけ)
+      if (h.days !== null && h.days < left - 0.05) html += ` ・ <span style="color:${daysLeftColor(h.days)}">${h.name} あと${h.days.toFixed(1)}日</span>`;
+    }
   } else if (a.phase === 'retreat') {
-    html += `<b>撤退中</b> 兵${a.troops}人・米${fmt(a.cargo)} ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
+    html += `<b>撤退中</b> 兵${a.troops}人・${amountsText(a.cargo, a.goods)} ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
   } else if (a.phase === 'home') {
     html += `軍勢は蔵に戻った(兵${a.troops}人)`;
   } else {
@@ -209,7 +252,7 @@ function renderRetreat(): void {
     const lost = a.dropped > 0 ? `<br><span class="bad">${t('離脱')}した兵: ${a.dropped}人</span>` : '';
     box.innerHTML =
       a.phase === 'retreat'
-        ? `兵${a.troops}人が蔵へ撤退中。持っている米 ${fmt(a.cargo)}。${lost}`
+        ? `兵${a.troops}人が蔵へ撤退中。持っている ${amountsText(a.cargo, a.goods)}。${lost}`
         : `兵${a.troops}/${a.troopsTotal}人が帰還。${lost}`;
     return;
   }
@@ -226,15 +269,23 @@ function renderRetreat(): void {
         )
         .join('') +
       '</div>',
-    `<div>兵${a.troops}人 × ${a.ration} × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る。兵が持てるのは <b class="num">${fmt(p.capacity)}</b> まで</div>`,
-    `<div>${nodeName(a.at)}から持ち出す: ${fmt(p.fromFront)}(撤退の日に陣に残っている分から)</div>`,
+    goodsOf(sc).length
+      ? `<div>兵${a.troops}人 × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る${splitText(p.need, p.shares)}。兵が持てるのは合計 <b class="num">${fmt(p.capacity)}</b> まで</div>`
+      : `<div>兵${a.troops}人 × ${a.ration} × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る。兵が持てるのは <b class="num">${fmt(p.capacity)}</b> まで</div>`,
+    `<div>${nodeName(a.at)}から持ち出す: ${fmt(p.fromFront)}${splitText(p.fromFront, p.shares)}(撤退の日に陣に残っている分から)</div>`,
   ];
   for (const s of p.stops) {
     if (s.required <= 0) continue;
     const ok = s.have + EPS >= s.required;
+    const now = goodsOf(sc).length ? (() => {
+      const am = nodeAmounts(state, s.id);
+      const rice = am.rice ?? 0;
+      delete am.rice;
+      return amountsText(rice, am);
+    })() : fmt(s.have);
     rows.push(
-      `<div>${nodeName(s.id)}に${t('置き米')}: <b class="num">${fmt(s.required)}</b> ` +
-        `<span class="${ok ? 'good' : 'bad'}">(今 ${fmt(s.have)}${ok ? ' ✓' : ''})</span></div>`,
+      `<div>${nodeName(s.id)}に${t('置き米')}: <b class="num">${fmt(s.required)}</b>${splitText(s.required, p.shares)} ` +
+        `<span class="${ok ? 'good' : 'bad'}">(今 ${now}${ok ? ' ✓' : ''})</span></div>`,
     );
   }
   for (const r of p.risks) {
@@ -311,8 +362,10 @@ function renderHint(): void {
   // 自動の隊だけで動かした場合も、最初の説明は済んだものとする
   if (state.convoys.some((c) => c.move)) dispatchedOnce = true;
   if (!dispatchedOnce) {
+    const goods = goodsOf(state.scenario);
     hint =
-      `${t('運搬隊')}を選び、行き先に<b>前線の${t('陣')}</b>を選んで出発させてください。<br>${t('人足')}も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>`;
+      `${t('運搬隊')}を選び、行き先に<b>前線の${t('陣')}</b>を選んで出発させてください。<br>${t('人足')}も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>` +
+      (goods.length ? `<br>このシナリオでは米のほかに${goods.map((g) => t(g.name)).join('と')}も運びます。` : '');
   } else if (a.phase === 'retreat') {
     hint = `${t('撤退')}中です。蔵の外に残った${t('運搬隊')}は<b>帰還に数えません</b>。${t('帰り分')}を持たせて蔵へ戻してください。`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
@@ -344,7 +397,7 @@ function renderPanel(): void {
     const where = c.dropped
       ? '離脱'
       : c.move
-        ? `${nodeName(c.move.route[c.move.route.length - 1]!)}へ移動中・米${fmt(c.cargo)}`
+        ? `${nodeName(c.move.route[c.move.route.length - 1]!)}へ移動中・${amountsText(c.cargo, c.goods)}`
         : `${nodeName(c.at)}で待機`;
     const autoTag = c.auto && !c.dropped ? '<span class="auto-tag">自動</span>' : '';
     b.innerHTML = `<span>${i + 1}. ${c.name}(人足${c.carriers})${autoTag}</span><span class="st">${where}</span>`;
@@ -370,32 +423,53 @@ function renderPanel(): void {
 }
 
 function previewHtml(nodes: string[]): string {
-  const sc = state.scenario;
   const c = selectedConvoy()!;
   const p = tripPreview(state, c, nodes, load)!;
+  const ration = p.route.days > 0 ? p.eat / (c.carriers * p.route.days) : 0;
+  const goodsTotal = Object.values(goodsLoad).reduce((x, y) => x + y, 0);
+  // 物資は道中で減らない。危険がすべて起きたときは、通る危険ごとに (1 - 失う割合) が掛かる
+  const keep = p.risks.reduce((k, x) => k * (1 - x.risk.loss), 1);
+  const scaled = (f: number) => Object.fromEntries(Object.entries(goodsLoad).map(([k, v]) => [k, v * f]));
   const lines = [
     `道: ${nodes.map(nodeName).join(' → ')}(${fmt(p.route.days)}日)`,
-    `人足${c.carriers}人 × ${sc.carrierRation} × ${fmt(p.route.days)}日 = 道中で <b class="num">${fmt(p.eat)}</b> 食べる`,
+    `人足${c.carriers}人 × ${fmt(ration)} × ${fmt(p.route.days)}日 = 道中で米 <b class="num">${fmt(p.eat)}</b> 食べる`,
   ];
+  if (goodsTotal > EPS) lines.push(`積荷の合計 <b class="num">${fmt(load + goodsTotal)}</b> / ${fmt(maxLoad(c, state.scenario.carrierCapacity))}`);
   if (p.arrive + EPS < 0) {
     lines.push(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(積み荷も失われます)。</span>`);
   } else if (!p.risks.length) {
-    lines.push(`出発 <b class="num">${fmt(load)}</b> → 到着 <b class="num">${fmt(Math.max(0, p.arrive))}</b>`);
+    lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 到着 <b class="num">${amountsText(Math.max(0, p.arrive), goodsLoad)}</b>`);
   } else {
     const r = p.risks.map((x) => `${x.risk.label}(${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う)`).join('・');
-    lines.push(`出発 <b class="num">${fmt(load)}</b> → 無事なら <b class="num">${fmt(Math.max(0, p.arrive))}</b>`);
+    lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 無事なら <b class="num">${amountsText(Math.max(0, p.arrive), goodsLoad)}</b>`);
     lines.push(
       p.arriveWorst + EPS >= 0
-        ? `<span class="warn">⚠ ${r}。起きれば到着 <b class="num">${fmt(p.arriveWorst)}</b></span>`
+        ? `<span class="warn">⚠ ${r}。起きれば到着 <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
         : `<span class="bad">⚠ ${r}。起きると道中で食料が尽き、人足が離脱します。</span>`,
     );
   }
   return lines.join('<br>');
 }
 
+/** 陣の割合(兵が使う米と物資の比)で満載にする積荷。米は道中で食べる分を先に確保する */
+function mixLoad(nodes: string[]): { rice: number; goods: Record<string, number> } {
+  const c = selectedConvoy()!;
+  const sc = state.scenario;
+  const eat = tripPreview(state, c, nodes, 0)!.eat;
+  const room = Math.max(0, maxLoad(c, sc.carrierCapacity) - eat);
+  const shares = retreatPlan(state).shares;
+  const here = nodeAmounts(state, c.at);
+  const goods: Record<string, number> = {};
+  for (const g of goodsOf(sc)) goods[g.id] = Math.floor(Math.min(room * (shares[g.id] ?? 0), here[g.id] ?? 0) * 2) / 2;
+  const used = Object.values(goods).reduce((x, y) => x + y, 0);
+  const rice = Math.min(eat + room - used, here.rice ?? 0);
+  return { rice: Math.floor(rice * 2) / 2, goods };
+}
+
 function currentOrderKey(): string {
   const c = selectedConvoy();
-  return [selected, dest, routeIdx, c?.at, !!c?.move, c?.auto, c ? state.rice[c.at] : '', state.outcome].join('|');
+  const here = c ? JSON.stringify(nodeAmounts(state, c.at)) : '';
+  return [selected, dest, routeIdx, c?.at, !!c?.move, c?.auto, here, state.outcome, state.activeCards.join()].join('|');
 }
 
 function renderOrder(): void {
@@ -439,10 +513,19 @@ function renderOrder(): void {
   let safe: number | null = null;
   if (route && dest) {
     const cap = maxLoad(c, sc.carrierCapacity);
-    const have = state.rice[c.at] ?? 0;
-    const max = Math.min(cap, have);
+    const here = nodeAmounts(state, c.at);
+    // 物資の量を在庫と積める上限に収める(米は残りの積載まで)
+    for (const g of goodsOf(sc)) goodsLoad[g.id] = Math.max(0, Math.min(goodsLoad[g.id] ?? 0, here[g.id] ?? 0));
+    let gsum = Object.values(goodsLoad).reduce((x, y) => x + y, 0);
+    if (gsum > cap) {
+      for (const g of goodsOf(sc)) goodsLoad[g.id] = (goodsLoad[g.id] ?? 0) * (cap / gsum);
+      gsum = cap;
+    }
+    const have = here.rice ?? 0;
+    const max = Math.min(cap - gsum, have);
     load = Math.min(load, max);
-    const eat = eatenOver(c, sc.carrierRation, route.days);
+    // 道中で食べる量は、護衛付きなどのカードも含めて core の見積もりから取る
+    const eat = tripPreview(state, c, route.nodes, 0)!.eat;
     // 危険が起きると「帰り分」では足りなくなる道だけ、備えの分を出す
     // (危険が最後の区間にあるなら、荷を失っても食料は尽きないので要らない)
     const risky = tripPreview(state, c, route.nodes, 0)!.risks.length > 0;
@@ -459,7 +542,12 @@ function renderOrder(): void {
           .join('') +
         '</div>',
       `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
-      `<div class="row"><button type="button" id="load-full">満載(${fmt(max)})</button>` +
+      ...goodsOf(sc).map(
+        (g) =>
+          `<div class="row">積む${t(g.name)} <input data-good="${g.id}" type="range" min="0" max="${Math.min(here[g.id] ?? 0, cap)}" step="0.5" value="${goodsLoad[g.id] ?? 0}" /> <b data-good-val="${g.id}" class="num">${fmt(goodsLoad[g.id] ?? 0)}</b></div>`,
+      ),
+      `<div class="row"><button type="button" id="load-full">${goodsOf(sc).length ? '残りを米で満載' : `満載(${fmt(max)})`}</button>` +
+        (goodsOf(sc).length ? '<button type="button" id="load-mix">陣の割合で満載</button>' : '') +
         `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button>` +
         (needsBuffer
           ? `<button type="button" id="load-safe" ${safe === null ? 'disabled' : ''}>荷を失っても尽きない分${safeNeed === null ? '' : `(${fmt(safeNeed)})`}</button>`
@@ -482,22 +570,55 @@ function renderOrder(): void {
       }),
   );
   if (!route || !dest) return;
-  const eat = eatenOver(c, sc.carrierRation, route.days);
+  const eat = tripPreview(state, c, route.nodes, 0)!.eat;
+  const cap = maxLoad(c, sc.carrierCapacity);
   const range = body.querySelector<HTMLInputElement>('#load');
+  const goodsRanges = [...body.querySelectorAll<HTMLInputElement>('[data-good]')];
+  /** 合計が上限を超えないよう、ほかのスライダーの上限を付け直す(要素は作り直さない) */
+  const syncMax = () => {
+    const here = nodeAmounts(state, c.at);
+    const gsum = Object.values(goodsLoad).reduce((x, y) => x + y, 0);
+    if (range) range.max = String(Math.max(0, Math.min(cap - gsum, here.rice ?? 0)));
+    for (const r of goodsRanges) {
+      const id = r.dataset.good!;
+      r.max = String(Math.max(0, Math.min(here[id] ?? 0, cap - load - (gsum - (goodsLoad[id] ?? 0)))));
+    }
+  };
   if (range) {
     // 要素を作り直さず、数字と予告だけ書き換える(作り直すとドラッグが途切れる)
     range.oninput = () => {
       load = Number(range.value);
       $('load-val').textContent = fmt(load);
+      syncMax();
       $('preview').innerHTML = previewHtml(route.nodes);
     };
   }
+  for (const r of goodsRanges) {
+    r.oninput = () => {
+      goodsLoad[r.dataset.good!] = Number(r.value);
+      body.querySelector<HTMLElement>(`[data-good-val="${r.dataset.good}"]`)!.textContent = fmt(Number(r.value));
+      syncMax();
+      $('preview').innerHTML = previewHtml(route.nodes);
+    };
+  }
+  syncMax();
   $('load-full').onclick = () => {
-    load = Math.min(maxLoad(c, sc.carrierCapacity), state.rice[c.at] ?? 0);
+    const gsum = Object.values(goodsLoad).reduce((x, y) => x + y, 0);
+    load = Math.min(cap - gsum, state.rice[c.at] ?? 0);
     renderOrder();
   };
+  const mixBtn = body.querySelector<HTMLButtonElement>('#load-mix');
+  if (mixBtn) {
+    mixBtn.onclick = () => {
+      const m = mixLoad(route.nodes);
+      load = m.rice;
+      goodsLoad = m.goods;
+      renderOrder();
+    };
+  }
   $('load-back').onclick = () => {
     load = eat;
+    goodsLoad = {};
     renderOrder();
   };
   const safeBtn = body.querySelector<HTMLButtonElement>('#load-safe');
@@ -510,7 +631,8 @@ function renderOrder(): void {
   }
   $('btn-go').onclick = () => {
     if (load + EPS < eat && !confirm('道中で食料が尽き、人足が離脱します。それでも出発させますか?')) return;
-    const r = dispatch(state, c.id, dest!, load, route.nodes);
+    const goods = Object.fromEntries(Object.entries(goodsLoad).filter(([, v]) => v > EPS));
+    const r = dispatch(state, c.id, dest!, load, route.nodes, goods);
     if (!r.ok) {
       alert(r.error);
       return;
@@ -549,13 +671,13 @@ function showResult(): void {
   if (!r.held) {
     text = `第${fmt(currentDay(state))}日、${nodeName(sc.frontId)}の兵糧が尽きました。\n遠征は失敗です。`;
   } else {
-    const where = r.surplusByNode.map((x) => `${nodeName(x.id)} ${fmt(x.rice)}`).join('、');
+    const where = r.surplusByNode.map((x) => `${nodeName(x.id)} ${fmt(x.amount)}`).join('、');
     text = [
       `${sc.goalDays}日間${nodeName(sc.frontId)}を保ち、撤退しました。`,
       '',
       `帰還: 兵 ${r.troopsHome}/${r.troopsTotal}人 ・ 人足 ${r.carriersHome}/${r.carriersTotal}人`,
       `  → +${(r.troopsHome + r.carriersHome) * scoring.perPerson}点(1人${scoring.perPerson}点)`,
-      `余剰(蔵の外に残した米): ${fmt(r.surplus)}${where ? `(${where})` : ''}`,
+      `余剰(蔵の外に残した米・物資): ${fmt(r.surplus)}${where ? `(${where})` : ''}`,
       `  → −${fmt(r.surplus * scoring.perSurplus)}点(村への負担)`,
       '',
       `得点 ${fmt(r.score)} / 満点 ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
@@ -596,6 +718,20 @@ canvas.addEventListener('click', (e) => {
 window.addEventListener('resize', resize);
 
 setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
+{
+  const sel = $<HTMLSelectElement>('scenario');
+  sel.innerHTML = SCENARIOS.map((x) => `<option value="${x.id}">${x.title}</option>`).join('');
+  sel.value = scenario.id;
+  sel.onchange = () => {
+    scenario = SCENARIOS.find((x) => x.id === sel.value) ?? SCENARIOS[0]!;
+    // シナリオを変えたら、シードは選び直す(URL の seed は外す)
+    const url = new URL(location.href);
+    url.searchParams.set('s', scenario.id);
+    url.searchParams.delete('seed');
+    history.replaceState(null, '', url);
+    reset();
+  };
+}
 reset();
 resize();
 requestAnimationFrame(tick);

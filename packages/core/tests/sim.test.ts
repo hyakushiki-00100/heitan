@@ -200,7 +200,7 @@ describe('遠征の終わりと評価', () => {
     const leftAtJin = 1000 - 20 * FRONT_PER_DAY - 48;
     expect(r).toMatchObject({ held: true, troopsHome: 24, troopsTotal: 24, carriersHome: CARRIERS, carriersTotal: CARRIERS });
     expect(r.surplus).toBe(leftAtJin);
-    expect(r.surplusByNode).toEqual([{ id: 'jin', rice: leftAtJin }]);
+    expect(r.surplusByNode).toEqual([{ id: 'jin', amount: leftAtJin }]);
     expect(r.score).toBe(PEOPLE * 10 - leftAtJin);
   });
   it('陣に置き去りにした運搬隊は帰還に数えない', () => {
