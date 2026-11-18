@@ -14,6 +14,7 @@ import {
   dispatch,
   goodsOf,
   nodeAmounts,
+  orderLocal,
   remainingDays,
   retreatPlan,
   retreatRoute,
@@ -87,6 +88,8 @@ function inbound(state: SimState, id: string): Amounts {
     out.rice! += Math.max(0, c.cargo - c.carriers * carrierRationOf(state, mv.route) * remainingDays(state.scenario, mv));
     for (const [g, v] of Object.entries(c.goods)) out[g] = (out[g] ?? 0) + v;
   }
+  // 村の運び手が届ける途中の米(現地調達)
+  for (const o of state.orders) if (o.to === id) out.rice! += o.rice;
   return out;
 }
 
@@ -328,9 +331,38 @@ function sendFull(state: SimState, c: Convoy, to: string, onlyIfArriveBy: number
   return dispatch(state, c.id, to, rice, nodes, goods).ok;
 }
 
+/**
+ * 現地調達: 陣の米が「市から届くまでの日数 + marginDays」を切りそうなら、陣に一番近い市(maxDays 日以内)から
+ * 陣の buyDays 日分の米を買い、村の運び手に届けてもらう。届く途中の注文があるあいだは重ねて買わない
+ */
+function localProcurement(state: SimState): void {
+  const gp = cardParams(state, 'genchi');
+  const sc = state.scenario;
+  if (!gp || state.army.phase !== 'hold') return;
+  if (state.orders.some((o) => o.to === sc.frontId)) return;
+  const perDay = nodeConsumptionPerDay(state, sc.frontId);
+  if (perDay <= 0) return;
+  let best: { id: string; days: number } | null = null;
+  for (const [id, m] of Object.entries(state.markets)) {
+    if (m.left <= EPS) continue;
+    const r = candidateRoutes(sc.map, id, sc.frontId, 1)[0];
+    if (!r || r.days > (gp.maxDays ?? 6)) continue;
+    if (!best || r.days < best.days) best = { id, days: r.days };
+  }
+  if (!best) return;
+  // 届くまでの間に、陣に向かっている運搬隊の米も入ってくる
+  const riceDays = ((state.rice[sc.frontId] ?? 0) + inbound(state, sc.frontId).rice!) / perDay;
+  if (riceDays >= best.days + (gp.marginDays ?? 2)) return;
+  // 撤退開始より後に届くなら買わない(余剰になるだけ)
+  if (currentDay(state) + best.days > sc.goalDays) return;
+  const amount = Math.min(state.markets[best.id]!.left, perDay * (gp.buyDays ?? 4));
+  if (amount > EPS) orderLocal(state, best.id, sc.frontId, amount);
+}
+
 /** 待機中の自動の隊に、カードに従って指図する */
 export function runRules(state: SimState): void {
   if (state.outcome !== 'playing') return;
+  localProcurement(state);
   const sc = state.scenario;
   const depot = sc.depotId;
   const front = sc.frontId;

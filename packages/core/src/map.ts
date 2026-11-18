@@ -26,6 +26,20 @@ export interface MapLink {
   days: number;
   /** 危険(省略は安全な道) */
   risk?: LinkRisk;
+  /** 襲撃(省略は襲撃のない道) */
+  raid?: LinkRaid;
+}
+
+/**
+ * 襲撃(野伏せりなど)。運搬隊がその道にいる間、半日ごとに chancePerDay×半日 の確率で襲われ、
+ * 積み荷の loss の割合を失う。長い道に長くいるほど狙われやすい(通るたびに1回だけの LinkRisk とはここが違う)
+ */
+export interface LinkRaid {
+  label: string;
+  /** 1日あたりの確率(半日なら半分) */
+  chancePerDay: number;
+  /** 襲われたときに失う積み荷の割合(0〜1) */
+  loss: number;
 }
 
 export interface GameMap {
@@ -50,6 +64,12 @@ export function validateMap(map: GameMap): void {
       if (!(r.chance >= 0 && r.chance <= 1)) throw new Error(`危険の確率は0〜1: ${l.a}-${l.b}`);
       if (!(r.loss >= 0 && r.loss <= 1)) throw new Error(`危険で失う割合は0〜1: ${l.a}-${l.b}`);
       if (!r.label) throw new Error(`危険に名前がない: ${l.a}-${l.b}`);
+    }
+    if (l.raid) {
+      const r = l.raid;
+      if (!(r.chancePerDay >= 0 && r.chancePerDay <= 2)) throw new Error(`襲撃の確率は1日あたり0〜2: ${l.a}-${l.b}`);
+      if (!(r.loss >= 0 && r.loss <= 1)) throw new Error(`襲撃で失う割合は0〜1: ${l.a}-${l.b}`);
+      if (!r.label) throw new Error(`襲撃に名前がない: ${l.a}-${l.b}`);
     }
     const key = [l.a, l.b].sort().join('|');
     if (seen.has(key)) throw new Error(`リンクが重複: ${key}`);

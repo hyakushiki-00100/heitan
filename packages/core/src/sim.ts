@@ -1,7 +1,7 @@
 import { findLink, validateMap, type GameMap } from './map';
 import { Rng } from './rng';
-import { candidateRoutes, routeFromNodes, routeRisks, shortestRoute, type Route } from './route';
-import type { LinkRisk } from './map';
+import { candidateRoutes, routeFromNodes, routeRaids, routeRisks, shortestRoute, type Route } from './route';
+import type { LinkRaid, LinkRisk } from './map';
 import type { Scoring } from './score';
 import { armyCapacity, eatenOver, maxLoad, type Army, type Convoy, type Move } from './unit';
 
@@ -12,6 +12,21 @@ export interface NodeSetup {
   goods?: Record<string, number>;
   /** 毎日の米の消費(軍勢の分とは別)。省略は0 */
   consumptionPerDay?: number;
+  /** 市(米を買える)。省略は市なし */
+  market?: MarketSetup;
+}
+
+/**
+ * 市。米を買える。買うほど米価が上がり、払った額は「村への負担」として減点になる。
+ * 米価 = basePrice × (1 + priceRise × これまでに買った量 / rice)
+ */
+export interface MarketSetup {
+  /** 売ってくれる米の量 */
+  rice: number;
+  /** 最初の米価(米1あたりの負担) */
+  basePrice: number;
+  /** 売り切ったときに米価が何倍ぶん上がるか(1なら最後は2倍) */
+  priceRise: number;
 }
 
 /**
@@ -59,8 +74,8 @@ export interface ArmySetup {
 }
 
 /** ルールカードの種類(動きはコード側で決まっていて、数値だけデータで変えられる) */
-export type CardId = 'kiro' | 'chukei' | 'goei';
-export const CARD_IDS: readonly CardId[] = ['kiro', 'chukei', 'goei'];
+export type CardId = 'kiro' | 'chukei' | 'goei' | 'genchi';
+export const CARD_IDS: readonly CardId[] = ['kiro', 'chukei', 'goei', 'genchi'];
 
 export interface CardDef {
   id: CardId;
@@ -131,7 +146,19 @@ export interface SimState {
    * 物資の帳簿('rice' と物資ID → 量)。どこにも消えずに合計が合うかを確かめるために持つ。
    * 最初の量 = 拠点 + 運搬中 + 軍勢の手持ち + eaten + lost
    */
-  ledger: { initial: Record<string, number>; eaten: Record<string, number>; lost: Record<string, number> };
+  ledger: {
+    initial: Record<string, number>;
+    /** 市で買った量(最初の量に足して合計を確かめる) */
+    bought: Record<string, number>;
+    eaten: Record<string, number>;
+    lost: Record<string, number>;
+  };
+  /** 市の状態(拠点ID → 残り・買った量) */
+  markets: Record<string, { left: number; bought: number }>;
+  /** 村の運び手が届ける途中の米(現地調達) */
+  orders: { from: string; to: string; rice: number; arriveStep: number }[];
+  /** 市で払った額の合計(村への負担。減点になる) */
+  purchaseBurden: number;
   /** 記録用の数え上げ(評価・調整用) */
   stats: { hungerSteps: number; starvedNode: string | null };
 }
@@ -174,6 +201,11 @@ export function validateScenario(sc: Scenario): void {
     for (const [g, v] of Object.entries(n.goods ?? {})) {
       if (!goodIds.has(g)) throw new Error(`知らない物資: ${id}.${g}`);
       if (!(v >= 0)) throw new Error(`物資は0以上: ${id}.${g}`);
+    }
+    if (n.market) {
+      const m = n.market;
+      if (!(m.rice > 0 && m.basePrice >= 0 && m.priceRise >= 0)) throw new Error(`市の値が不正: ${id}`);
+      if (id === sc.depotId) throw new Error('蔵には市を置かない');
     }
     if (n.consumptionPerDay !== undefined && !(n.consumptionPerDay >= 0)) throw new Error(`消費は0以上: ${id}`);
   }
@@ -298,8 +330,16 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
     rng: new Rng(seed),
     activeCards: [],
     autoRoute: defaultRoute(scenario, scenario.depotId, scenario.frontId)!.nodes,
+    markets: Object.fromEntries(
+      Object.entries(scenario.nodes)
+        .filter(([, n]) => n.market)
+        .map(([id, n]) => [id, { left: n.market!.rice, bought: 0 }]),
+    ),
+    orders: [],
+    purchaseBurden: 0,
     ledger: {
       initial: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, totalOf(r === 'rice' ? rice : goods[r]!)])),
+      bought: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, 0])),
       eaten: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, 0])),
       lost: Object.fromEntries(['rice', ...goodsOf(scenario).map((g) => g.id)].map((r) => [r, 0])),
     },
@@ -311,7 +351,7 @@ const totalOf = (m: Record<string, number>) => Object.values(m).reduce((a, b) =>
 
 /**
  * 物資の合計が合っているか。合っていなければ、ずれている物資とその量を返す(合っていれば空)。
- * 最初の量 = 拠点 + 運搬中 + 軍勢の手持ち + 食べた・使った量 + 失った量
+ * 最初の量 + 市で買った量 = 拠点 + 運搬中 + 軍勢の手持ち + 村の運び手が届ける途中 + 食べた・使った量 + 失った量
  */
 export function ledgerMismatch(state: SimState, tolerance = 1e-6): { res: string; diff: number }[] {
   const out: { res: string; diff: number }[] = [];
@@ -319,7 +359,8 @@ export function ledgerMismatch(state: SimState, tolerance = 1e-6): { res: string
     let now = res === 'rice' ? totalOf(state.rice) : totalOf(state.goods[res]!);
     for (const c of state.convoys) now += res === 'rice' ? c.cargo : (c.goods[res] ?? 0);
     now += res === 'rice' ? state.army.cargo : (state.army.goods[res] ?? 0);
-    const diff = state.ledger.initial[res]! - (now + state.ledger.eaten[res]! + state.ledger.lost[res]!);
+    if (res === 'rice') for (const o of state.orders) now += o.rice;
+    const diff = state.ledger.initial[res]! + state.ledger.bought[res]! - (now + state.ledger.eaten[res]! + state.ledger.lost[res]!);
     if (Math.abs(diff) > tolerance) out.push({ res, diff });
   }
   return out;
@@ -358,7 +399,8 @@ export function setAuto(state: SimState, convoyId: string, on: boolean): boolean
 export function carrierRationOf(state: SimState, routeNodes: string[]): number {
   const goei = cardParams(state, 'goei');
   const base = state.scenario.carrierRation;
-  if (!goei || routeRisks(state.scenario.map, routeNodes).length === 0) return base;
+  const dangerous = routeRisks(state.scenario.map, routeNodes).length > 0 || routeRaids(state.scenario.map, routeNodes).length > 0;
+  if (!goei || !dangerous) return base;
   return base * (goei.rationFactor ?? 1);
 }
 
@@ -366,6 +408,12 @@ export function carrierRationOf(state: SimState, routeNodes: string[]): number {
 export function convoyRiskChance(state: SimState, risk: LinkRisk): number {
   const goei = cardParams(state, 'goei');
   return risk.chance * (goei?.chanceFactor ?? 1);
+}
+
+/** 襲撃が運搬隊に起きる、半日(1刻み)あたりの確率(護衛付きなら下がる) */
+export function convoyRaidChance(state: SimState, raid: LinkRaid): number {
+  const goei = cardParams(state, 'goei');
+  return Math.min(1, raid.chancePerDay * state.scenario.stepDays * (goei?.chanceFactor ?? 1));
 }
 
 function stepsForLeg(scenario: Scenario, a: string, b: string): number {
@@ -489,6 +537,8 @@ export interface TripPreview {
   /** 馬が道中で食べる飼い葉(馬がいなければ0) */
   fodderNeed: number;
   risks: { a: string; b: string; risk: LinkRisk }[];
+  /** 道の襲撃(見積もりの最悪値は、区間ごとに1回襲われた場合) */
+  raids: { a: string; b: string; days: number; raid: LinkRaid }[];
 }
 
 /** 出発前の見積もり。危険が起きない場合と、全部起きた場合の両方を出す */
@@ -503,6 +553,8 @@ export function tripPreview(state: SimState, convoy: Convoy, nodes: string[], lo
     worst -= perDay * link.days;
     if (worst < -EPS) break;
     if (link.risk) worst *= 1 - link.risk.loss;
+    // 襲撃は何度も起こりうるが、見積もりの「最悪」は区間ごとに1回襲われた場合とする
+    if (link.raid) worst *= 1 - link.raid.loss;
   }
   const eat = eatenOver(convoy, carrierRationOf(state, nodes), route.days);
   return {
@@ -512,6 +564,7 @@ export function tripPreview(state: SimState, convoy: Convoy, nodes: string[], lo
     arriveWorst: worst < -EPS ? worst : clean(Math.max(0, worst)),
     fodderNeed: fodderFor(state, convoy, route.days),
     risks: routeRisks(sc.map, nodes),
+    raids: routeRaids(sc.map, nodes),
   };
 }
 
@@ -532,7 +585,11 @@ function applyRisk(
   const chance = isConvoy ? convoyRiskChance(state, link.risk) : link.risk.chance;
   if (chance <= 0) return 0;
   if (state.rng.next() >= chance) return 0;
-  const loss = link.risk.loss;
+  return applyLoss(state, holder, link.risk.loss, `${who}は${link.risk.label}で荷の${Math.round(link.risk.loss * 100)}%`);
+}
+
+/** 積み荷(米と物資)を loss の割合だけ失わせ、帳簿に記録し、失った量を返す。what はログの書き出し */
+function applyLoss(state: SimState, holder: { cargo: number; goods: Record<string, number> }, loss: number, what: string): number {
   const before = holder.cargo;
   holder.cargo = clean(holder.cargo - holder.cargo * loss);
   const lost = before - holder.cargo;
@@ -545,8 +602,20 @@ function applyRisk(
     state.ledger.lost[id] = (state.ledger.lost[id] ?? 0) + lostGoods[id]!;
   }
   const total = lost + goodsWeight(lostGoods);
-  if (total > 0) addLog(state, `${who}は${link.risk.label}で荷の${Math.round(loss * 100)}%(${cargoText(state, lost, lostGoods)})を失った`);
+  if (total > 0) addLog(state, `${what}(${cargoText(state, lost, lostGoods)})を失った`);
   return total;
+}
+
+/** 移動中の運搬隊が、今いる区間で襲撃に遭うかの判定(半日ごと) */
+function applyRaid(state: SimState, c: Convoy): void {
+  const mv = c.move;
+  if (!mv) return;
+  const link = findLink(state.scenario.map, mv.route[mv.leg]!, mv.route[mv.leg + 1]!);
+  if (!link?.raid) return;
+  const chance = convoyRaidChance(state, link.raid);
+  if (chance <= 0 || state.rng.next() >= chance) return;
+  if (c.cargo + goodsWeight(c.goods) <= EPS) return;
+  applyLoss(state, c, link.raid.loss, `${c.name}は${link.raid.label}に襲われ、荷の${Math.round(link.raid.loss * 100)}%`);
 }
 
 export interface RetreatPlan {
@@ -845,6 +914,63 @@ function feedArmy(state: SimState, pool: FoodPool): number {
   return fed;
 }
 
+/** 市の今の米価(米1あたりの負担)。市がなければ null */
+export function marketPrice(state: SimState, nodeId: string): number | null {
+  const setup = state.scenario.nodes[nodeId]?.market;
+  const m = state.markets[nodeId];
+  if (!setup || !m) return null;
+  return setup.basePrice * (1 + (setup.priceRise * m.bought) / setup.rice);
+}
+
+/** 市で amount 買ったときに払う額(米価は買いながら上がるので、買う前と後の米価の平均を掛ける) */
+export function purchaseCost(state: SimState, nodeId: string, amount: number): number {
+  const setup = state.scenario.nodes[nodeId]?.market;
+  const m = state.markets[nodeId];
+  if (!setup || !m) return Infinity;
+  return amount * setup.basePrice * (1 + (setup.priceRise * (m.bought + amount / 2)) / setup.rice);
+}
+
+/** 市で米を買う。後でどこへ置くかは呼ぶ側が決める(内部用) */
+function takeFromMarket(state: SimState, nodeId: string, amount: number): { ok: true; cost: number } | { ok: false; error: string } {
+  const m = state.markets[nodeId];
+  if (state.outcome !== 'playing') return { ok: false, error: '遠征は終わっています' };
+  if (!m) return { ok: false, error: '市がありません' };
+  if (!(amount > 0)) return { ok: false, error: '買う量が不正です' };
+  if (amount > m.left + EPS) return { ok: false, error: `市の米(${r1(m.left)})が足りません` };
+  const before = marketPrice(state, nodeId)!;
+  const cost = purchaseCost(state, nodeId, amount);
+  m.left = clean(m.left - amount);
+  m.bought += amount;
+  state.purchaseBurden += cost;
+  state.ledger.bought.rice! += amount;
+  addLog(
+    state,
+    `${nodeName(state, nodeId)}の市で米${r1(amount)}を買った(米価 ${before.toFixed(2)}→${marketPrice(state, nodeId)!.toFixed(2)}、村への負担 +${r1(cost)})`,
+  );
+  return { ok: true, cost };
+}
+
+/** 市で米を買い、その拠点に置く(運ぶのは運搬隊) */
+export function buyLocal(state: SimState, nodeId: string, amount: number): { ok: true; cost: number } | { ok: false; error: string } {
+  const r = takeFromMarket(state, nodeId, amount);
+  if (r.ok) state.rice[nodeId] = (state.rice[nodeId] ?? 0) + amount;
+  return r;
+}
+
+/**
+ * 市で米を買い、村の運び手に to まで届けてもらう(現地調達)。届くまで道の日数がかかる。
+ * 村の運び手は自分たちの食べ物を持っていく(届ける米は減らない)。襲撃や川越えにも遭わない(簡略化)
+ */
+export function orderLocal(state: SimState, nodeId: string, to: string, amount: number): { ok: true; cost: number; days: number } | { ok: false; error: string } {
+  const route = defaultRoute(state.scenario, nodeId, to);
+  if (!route) return { ok: false, error: '道がつながっていません' };
+  const r = takeFromMarket(state, nodeId, amount);
+  if (!r.ok) return r;
+  const steps = Math.max(1, Math.round(route.days / state.scenario.stepDays));
+  state.orders.push({ from: nodeId, to, rice: amount, arriveStep: state.step + steps });
+  return { ok: true, cost: r.cost, days: route.days };
+}
+
 /**
  * 移動中の運搬隊の馬に飼い葉を食べさせる。足りなければ、馬は荷を運べなくなり、
  * 人足が運べる量を超えた分の荷(米と物資を同じ割合で)を捨てる。捨てた量は帳簿の「失った量」に入る
@@ -885,6 +1011,14 @@ export function step(state: SimState): void {
   const sc = state.scenario;
   state.step += 1;
 
+  // 0. 村の運び手が届ける米
+  state.orders = state.orders.filter((o) => {
+    if (o.arriveStep > state.step) return true;
+    state.rice[o.to] = (state.rice[o.to] ?? 0) + o.rice;
+    addLog(state, `${nodeName(state, o.from)}の村人が${nodeName(state, o.to)}に米${r1(o.rice)}を届けた`);
+    return false;
+  });
+
   // 1. 運搬隊が食べて、進む
   for (const convoy of state.convoys) {
     const mv = convoy.move;
@@ -907,6 +1041,7 @@ export function step(state: SimState): void {
     convoy.cargo = clean(convoy.cargo - need);
     state.ledger.eaten.rice! += beforeEat - convoy.cargo;
     feedHorses(state, convoy);
+    applyRaid(state, convoy);
     const from = mv.route[mv.leg]!;
     const { reached, finished } = advance(sc, mv);
     if (reached) {

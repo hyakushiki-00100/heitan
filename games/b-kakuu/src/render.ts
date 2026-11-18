@@ -1,4 +1,4 @@
-import { armyPosition, convoyPosition, frontDaysLeft, goodsOf, type MapNode, type SimState } from '@hyoro/core';
+import { armyPosition, convoyPosition, frontDaysLeft, goodsOf, marketPrice, type MapNode, type SimState } from '@hyoro/core';
 
 const C = {
   paper: '#f4efe4',
@@ -95,7 +95,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const a = toScreen(v, byId.get(l.a)!);
     const b = toScreen(v, byId.get(l.b)!);
     const hot = onRoute.has([l.a, l.b].sort().join('|'));
-    ctx.strokeStyle = hot ? C.accent : l.risk ? C.warn : C.line;
+    ctx.strokeStyle = hot ? C.accent : l.risk || l.raid ? C.warn : C.line;
     ctx.lineWidth = hot ? 5 : 3;
     ctx.setLineDash(hot ? [] : [8, 5]);
     ctx.beginPath();
@@ -106,11 +106,12 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
     // 狭い画面では危険の名前を省く(拠点の文字と重なるため。名前は道の選択と用語集で見られる)
-    const label = l.risk ? (v.w < 600 ? `${l.days}日⚠` : `${l.days}日 ⚠${l.risk.label}`) : `${l.days}日`;
+    const mark = l.risk ? (v.w < 600 ? '⚠' : ` ⚠${l.risk.label}`) : l.raid ? (v.w < 600 ? '⚔' : ` ⚔${l.raid.label}`) : '';
+    const label = `${l.days}日${mark}`;
     const tw = ctx.measureText(label).width + 8;
     ctx.fillStyle = C.paper;
     ctx.fillRect(mx - tw / 2, my - 8, tw, 16);
-    ctx.fillStyle = hot ? C.accent : l.risk ? C.warn : C.ink2;
+    ctx.fillStyle = hot ? C.accent : l.risk || l.raid ? C.warn : C.ink2;
     ctx.fillText(label, mx, my);
   }
 
@@ -173,6 +174,15 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
       // 狭い画面では、名前を1文字・数字を整数にして短くする(隣の拠点に文字がかかるため)
       .map((x) => (v.w < 600 ? `${x.g.name[0]}${Math.round(x.v)}` : `${x.g.name}${fmt(x.v)}`))
       .join(' ');
+    // 市: 残りの米と今の米価
+    const mk = state.markets[n.id];
+    const price = marketPrice(state, n.id);
+    if (mk && price !== null) {
+      ctx.font = 'bold 11px serif';
+      ctx.fillStyle = C.accent;
+      ctx.fillText(v.w < 600 ? `市${Math.round(mk.left)}` : `市 米${Math.round(mk.left)} 価${price.toFixed(2)}`, p.x, below);
+      below += 14;
+    }
     if (goodsText) {
       // 待機中の隊の印(拠点の周り、半径 NODE_R+12 に置く)と重ならないよう、その外側に書く
       const idleHere = state.convoys.some((c) => !c.move && !c.dropped && c.at === n.id);

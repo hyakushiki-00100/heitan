@@ -26,6 +26,10 @@ export interface ExpeditionResult {
   surplus: number;
   /** 拠点ごとの余剰(米と物資の合計) */
   surplusByNode: { id: string; amount: number }[];
+  /** 市で払った額(村への負担のうち、買った分) */
+  purchaseBurden: number;
+  /** 村への負担の合計(余剰の減点 + 市で払った額) */
+  villageBurden: number;
   score: number;
   /** 満点(全員帰還・余剰0) */
   maxScore: number;
@@ -55,7 +59,11 @@ export function evaluate(state: SimState): ExpeditionResult {
     if (r > 0) surplusByNode.push({ id: n.id, amount: r });
     surplus += r;
   }
-  const score = held ? (troopsHome + carriersHome) * scoring.perPerson - surplus * scoring.perSurplus : 0;
+  // 村の運び手が届ける途中の米も、蔵の外に残った米として数える
+  for (const o of state.orders) surplus += o.rice;
+  const purchaseBurden = state.purchaseBurden;
+  const villageBurden = surplus * scoring.perSurplus + purchaseBurden;
+  const score = held ? (troopsHome + carriersHome) * scoring.perPerson - villageBurden : 0;
   const maxScore = (state.army.troopsTotal + carriersTotal) * scoring.perPerson;
   const th = sc.starThresholds ?? DEFAULT_STAR_THRESHOLDS;
   const ratio = maxScore > 0 ? score / maxScore : 0;
@@ -68,6 +76,8 @@ export function evaluate(state: SimState): ExpeditionResult {
     carriersTotal,
     surplus,
     surplusByNode,
+    purchaseBurden,
+    villageBurden,
     score,
     maxScore,
     stars,

@@ -17,7 +17,11 @@ import raw from '../../../games/b-kakuu/data/scenario-03.json';
 const scenario = raw as unknown as Scenario;
 const fresh = (mutate?: (sc: Scenario) => void): SimState => {
   const sc = structuredClone(scenario);
-  for (const l of sc.map.links) delete l.risk;
+  // 結果を決めて確かめたいので、道の危険と襲撃を外す
+  for (const l of sc.map.links) {
+    delete l.risk;
+    delete l.raid;
+  }
   mutate?.(sc);
   return createState(sc, 1);
 };

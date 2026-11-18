@@ -31,6 +31,7 @@
   ],
   "nodes": {
     "kura": {"rice": 640, "goods": {"firewood": 220, "miso": 40}},
+    "mura": {"rice": 0, "market": {"rice": 80, "basePrice": 1, "priceRise": 1.5}},
     "jin":  {"rice": 130, "goods": {"firewood": 60, "miso": 12}}
   },
   "army": {"troops": 24, "ration": 0.5, "capacityPer": 3},
@@ -38,7 +39,8 @@
   "cards": [
     {"id": "kiro", "name": "帰路分を残す", "text": "自動の隊は、陣の2日分と撤退で持ち出す分・撤退路の置き米を減らす持ち出しをしない。帰り分は荷を失っても尽きない量を積み、撤退路の置き米も運ぶ。撤退する兵は、陣にいる運搬隊(手動の隊も)の帰り分を残す", "params": {"frontReserveDays": 2}},
     {"id": "chukei", "name": "中継経由", "text": "自動の人足の隊を「蔵⇔中継地」と「中継地⇔陣」に分けて往復させる(中継地は自動便の道の真ん中に近い拠点。区間の日数の比で隊を分ける)。馬の隊は飼い葉の都合で蔵から直送", "params": {}},
-    {"id": "goei", "name": "護衛付き", "text": "危険な道を行く運搬隊に護衛を付ける。その隊に危険が起きる確率が4分の1になる代わりに、人足の食事が1割増える", "params": {"chanceFactor": 0.25, "rationFactor": 1.1}}
+    {"id": "goei", "name": "護衛付き", "text": "危険な道を行く運搬隊に護衛を付ける。その隊に危険が起きる確率が4分の1になる代わりに、人足の食事が1割増える", "params": {"chanceFactor": 0.25, "rationFactor": 1.1}},
+    {"id": "genchi", "name": "現地調達", "text": "陣の米が尽きそうになったら、陣に一番近い市(6日以内)から陣の4日分の米を買い、村の運び手が届ける(届くまで道の日数がかかる)。払った額は村への負担として減点。買うほど米価が上がる", "params": {"marginDays": 2, "buyDays": 4, "maxDays": 6}}
   ],
   "convoys": [
     {"id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura"},

@@ -4,13 +4,16 @@ import {
   createState,
   currentDay,
   daysLeft,
+  buyLocal,
   convoyCapacity,
   dispatch,
   evaluate,
   fodderGood,
   frontDaysLeft,
   goodsOf,
+  marketPrice,
   nodeAmounts,
+  purchaseCost,
   retreatPlan,
   relayNode,
   setAuto,
@@ -123,10 +126,13 @@ function currentRoute() {
 function routeLabel(nodes: string[], days: number): string {
   const mid = nodes.slice(1, -1).map(nodeName);
   const via = mid.length ? `${mid.join('・')}経由` : '直行';
-  const risks = state.scenario.map.links.filter(
-    (l) => l.risk && nodes.some((n, i) => i + 1 < nodes.length && ((l.a === n && l.b === nodes[i + 1]) || (l.b === n && l.a === nodes[i + 1]))),
+  const onRoute = state.scenario.map.links.filter((l) =>
+    nodes.some((n, i) => i + 1 < nodes.length && ((l.a === n && l.b === nodes[i + 1]) || (l.b === n && l.a === nodes[i + 1]))),
   );
-  return `${via} ${fmt(days)}日${risks.length ? ' ⚠' + risks.map((l) => l.risk!.label).join('・') : ''}`;
+  const risks = onRoute.filter((l) => l.risk).map((l) => '⚠' + l.risk!.label);
+  const raids = onRoute.filter((l) => l.raid).map((l) => '⚔' + l.raid!.label);
+  const marks = [...risks, ...raids];
+  return `${via} ${fmt(days)}日${marks.length ? ' ' + marks.join(' ') : ''}`;
 }
 
 /** 危険がすべて起きても届く(食料が尽きない)最小の積み荷。積める上限で足りなければ null */
@@ -313,6 +319,44 @@ function renderRetreat(): void {
   });
 }
 
+/** 市の欄(市のないシナリオでは隠す) */
+function renderMarkets(): void {
+  const sec = $('markets-sec');
+  const ids = Object.keys(state.markets);
+  sec.hidden = ids.length === 0;
+  if (!ids.length) return;
+  const rows: string[] = [
+    `<div class="note">${t('市')}で米を買えます。買った米はその拠点に置かれ、運搬隊が運びます。払った額は${t('余剰', '村への負担')}として減点になり、買うほど${t('米価')}が上がります。</div>`,
+  ];
+  for (const id of ids) {
+    const m = state.markets[id]!;
+    const price = marketPrice(state, id)!;
+    const btn = (n: number) => {
+      const amt = Math.min(n, m.left);
+      const ok = amt > EPS && state.outcome === 'playing';
+      return `<button type="button" data-buy="${id}" data-amt="${amt}" ${ok ? '' : 'disabled'}>${fmt(amt)}買う(負担${ok ? fmt(purchaseCost(state, id, amt)) : '-'})</button>`;
+    };
+    rows.push(
+      `<div class="row"><b>${nodeName(id)}</b> 残り 米${fmt(m.left)} ・ 米価 ${price.toFixed(2)}</div>`,
+      `<div class="row">${btn(10)}${btn(25)}</div>`,
+    );
+  }
+  for (const o of state.orders) {
+    const left = (o.arriveStep - state.step) * state.scenario.stepDays;
+    rows.push(`<div class="note">${nodeName(o.from)}の村人が${nodeName(o.to)}へ米${fmt(o.rice)}を運んでいる(あと${fmt(left)}日)</div>`);
+  }
+  if (state.purchaseBurden > 0) rows.push(`<div class="note">これまでに市で払った負担: ${fmt(state.purchaseBurden)}</div>`);
+  const box = $('markets');
+  box.innerHTML = rows.join('');
+  box.querySelectorAll<HTMLButtonElement>('[data-buy]').forEach((b) => {
+    b.onclick = () => {
+      const r = buyLocal(state, b.dataset.buy!, Number(b.dataset.amt));
+      if (!r.ok) alert(r.error);
+      renderPanel();
+    };
+  });
+}
+
 /** ルールカードと自動便の欄 */
 function renderCards(): void {
   const box = $('cards');
@@ -396,6 +440,7 @@ function renderPanel(): void {
   renderHint();
   renderRetreat();
   renderCards();
+  renderMarkets();
 
   const box = $('convoys');
   box.innerHTML = '';
@@ -439,7 +484,7 @@ function previewHtml(nodes: string[]): string {
   const ration = p.route.days > 0 ? p.eat / (c.carriers * p.route.days) : 0;
   const goodsTotal = Object.values(goodsLoad).reduce((x, y) => x + y, 0);
   // 物資は道中で減らない。危険がすべて起きたときは、通る危険ごとに (1 - 失う割合) が掛かる
-  const keep = p.risks.reduce((k, x) => k * (1 - x.risk.loss), 1);
+  const keep = p.risks.reduce((k, x) => k * (1 - x.risk.loss), 1) * p.raids.reduce((k, x) => k * (1 - x.raid.loss), 1);
   // 到着する物資: 飼い葉は馬が道中で食べる分を引く(ほかの物資は減らない)
   const fgId = fodderGood(state.scenario)?.id;
   const arriveGoods = Object.fromEntries(
@@ -465,14 +510,19 @@ function previewHtml(nodes: string[]): string {
   }
   if (p.arrive + EPS < 0) {
     lines.push(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(積み荷も失われます)。</span>`);
-  } else if (!p.risks.length) {
+  } else if (!p.risks.length && !p.raids.length) {
     lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
   } else {
-    const r = p.risks.map((x) => `${x.risk.label}(${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う)`).join('・');
+    const r = [
+      ...p.risks.map((x) => `${x.risk.label}(${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う)`),
+      ...p.raids.map(
+        (x) => `${x.raid.label}(${nodeName(x.a)}→${nodeName(x.b)}にいる間、1日${Math.round(x.raid.chancePerDay * 100)}%で襲われ荷の${Math.round(x.raid.loss * 100)}%を失う。何度も起こりうる)`,
+      ),
+    ].join('・');
     lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 無事なら <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
     lines.push(
       p.arriveWorst + EPS >= 0
-        ? `<span class="warn">⚠ ${r}。起きれば到着 <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
+        ? `<span class="warn">⚠ ${r}。${p.raids.length ? 'それぞれ1回' : ''}起きれば到着 <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
         : `<span class="bad">⚠ ${r}。起きると道中で食料が尽き、人足が離脱します。</span>`,
     );
   }
@@ -717,6 +767,7 @@ function showResult(): void {
       `  → +${(r.troopsHome + r.carriersHome) * scoring.perPerson}点(1人${scoring.perPerson}点)`,
       `余剰(蔵の外に残した米・物資): ${fmt(r.surplus)}${where ? `(${where})` : ''}`,
       `  → −${fmt(r.surplus * scoring.perSurplus)}点(村への負担)`,
+      ...(r.purchaseBurden > 0 ? [`市で米を買った負担: −${fmt(r.purchaseBurden)}点(村への負担)`] : []),
       '',
       `得点 ${fmt(r.score)} / 満点 ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
       bestLine,

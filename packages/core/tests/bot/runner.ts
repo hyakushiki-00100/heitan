@@ -26,7 +26,7 @@ export interface RunRow {
   surplus: number;
   /** 負傷者数(このゲームでは離脱した兵と人足の合計) */
   injured: number;
-  /** 村への負担(今は余剰と同じ。米価・現地調達は 1-6 で入る) */
+  /** 村への負担(余剰の減点 + 市で払った額) */
   villageBurden: number;
   troopsHome: number;
   carriersHome: number;
@@ -89,7 +89,7 @@ export function runBot(game: string, scenario: Scenario, bot: Bot, seed: number)
     hungerDays: s ? s.stats.hungerSteps * scenario.stepDays : 0,
     surplus: r ? Math.round(r.surplus * 10) / 10 : 0,
     injured: (s?.army.dropped ?? 0) + dropCarriers,
-    villageBurden: r ? Math.round(r.surplus * 10) / 10 : 0,
+    villageBurden: r ? Math.round(r.villageBurden * 10) / 10 : 0,
     troopsHome: r?.troopsHome ?? 0,
     carriersHome: r?.carriersHome ?? 0,
   };

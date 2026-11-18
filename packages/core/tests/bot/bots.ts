@@ -86,6 +86,14 @@ export function rulesBot(cards: CardId[]): Bot {
 }
 
 /** preset-rules: 用意したルールカードの組み合わせ(シナリオに無いカードは setCardActive が無視する) */
-export const PRESET_CARDS: CardId[][] = [[], ['kiro'], ['kiro', 'chukei'], ['kiro', 'goei'], ['kiro', 'chukei', 'goei']];
+export const PRESET_CARDS: CardId[][] = [
+  [],
+  ['kiro'],
+  ['kiro', 'chukei'],
+  ['kiro', 'goei'],
+  ['kiro', 'chukei', 'goei'],
+  ['kiro', 'genchi'],
+  ['kiro', 'goei', 'genchi'],
+];
 
 export const ALL_BOTS: Bot[] = [idle, naive, ...PRESET_CARDS.map(rulesBot)];

@@ -1,4 +1,4 @@
-import { findLink, neighbors, type GameMap, type LinkRisk } from './map';
+import { findLink, neighbors, type GameMap, type LinkRaid, type LinkRisk } from './map';
 
 export interface Route {
   /** 出発ノードから到着ノードまでのID列(両端を含む) */
@@ -91,6 +91,16 @@ export function routeRisks(map: GameMap, nodes: string[]): { a: string; b: strin
   for (let i = 0; i + 1 < nodes.length; i++) {
     const link = findLink(map, nodes[i]!, nodes[i + 1]!);
     if (link?.risk) out.push({ a: nodes[i]!, b: nodes[i + 1]!, risk: link.risk });
+  }
+  return out;
+}
+
+/** 道に含まれる襲撃のある区間(days はその区間の日数) */
+export function routeRaids(map: GameMap, nodes: string[]): { a: string; b: string; days: number; raid: LinkRaid }[] {
+  const out: { a: string; b: string; days: number; raid: LinkRaid }[] = [];
+  for (let i = 0; i + 1 < nodes.length; i++) {
+    const link = findLink(map, nodes[i]!, nodes[i + 1]!);
+    if (link?.raid) out.push({ a: nodes[i]!, b: nodes[i + 1]!, days: link.days, raid: link.raid });
   }
   return out;
 }
