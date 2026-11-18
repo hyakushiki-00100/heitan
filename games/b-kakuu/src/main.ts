@@ -6,6 +6,8 @@ import {
   daysLeft,
   buyLocal,
   convoyCapacity,
+  decodeShare,
+  encodeShare,
   dispatch,
   evaluate,
   fodderGood,
@@ -86,6 +88,7 @@ function reset(): void {
   dispatchedOnce = false;
   orderKey = '';
   bestLine = null;
+  $('result-share').dataset.code = '';
   $('result').hidden = true;
   renderPanel();
 }
@@ -774,7 +777,89 @@ function showResult(): void {
     ].join('\n');
   }
   $('result-text').textContent = text;
+  // ★と、次の★までの得点
+  const starLine = '★'.repeat(r.stars) + '☆'.repeat(3 - r.stars);
+  const next = r.toNextStar === null ? (r.stars === 3 ? '最高の評価です' : '') : `★${r.stars + 1}まで あと${fmt(Math.ceil(r.toNextStar * 10) / 10)}点`;
+  $('result-stars').innerHTML = `${starLine}<small>${next}</small>`;
+  renderShare(r);
   $('result').hidden = false;
+}
+
+/** 結果の共有文字列と、同じ展開で遊ぶためのURL */
+function renderShare(r: ReturnType<typeof evaluate>): void {
+  const code = encodeShare({
+    scenario: state.scenario.id,
+    seed,
+    cards: state.activeCards,
+    outcome: r.held ? 'done' : 'lost',
+    score: r.score,
+    stars: r.stars,
+    troopsHome: r.troopsHome,
+    carriersHome: r.carriersHome,
+    surplus: r.surplus,
+  });
+  const url = playUrl(state.scenario.id, seed);
+  const box = $('result-share');
+  if (box.dataset.code === code) return; // 何度も呼ばれるので、同じなら作り直さない(選択が外れないように)
+  box.dataset.code = code;
+  box.innerHTML =
+    '<div>共有文字列(同じシナリオ・シードで、ほかの人も同じ展開を遊べます):</div>' +
+    `<input id="share-code" readonly value="${code}" />` +
+    '<div class="row"><button type="button" id="btn-copy">コピー</button>' +
+    `<a href="${url}">この展開をもう一度(シード ${seed})</a></div>`;
+  $('btn-copy').onclick = async () => {
+    const input = $<HTMLInputElement>('share-code');
+    try {
+      await navigator.clipboard.writeText(code);
+      $('btn-copy').textContent = 'コピーしました';
+    } catch {
+      // クリップボードが使えない環境では、選択して手でコピーしてもらう
+      input.select();
+      $('btn-copy').textContent = '選択しました(手でコピーしてください)';
+    }
+  };
+}
+
+/** そのシナリオ・シードで遊ぶためのURL */
+function playUrl(scenarioId: string, s: number): string {
+  const url = new URL(location.href);
+  url.search = '';
+  url.searchParams.set('s', scenarioId);
+  url.searchParams.set('seed', String(s));
+  return url.toString();
+}
+
+/** 共有文字列を読むダイアログ */
+function setupShareDialog(): void {
+  const dlg = $<HTMLDialogElement>('share-dialog');
+  $('btn-share-open').onclick = () => {
+    $('share-out').innerHTML = '';
+    if (typeof dlg.showModal === 'function') dlg.showModal();
+    else dlg.setAttribute('open', '');
+    $('share-input').focus();
+  };
+  $('btn-share-close').onclick = () => dlg.close();
+  $('btn-share-read').onclick = () => {
+    const r = decodeShare($<HTMLTextAreaElement>('share-input').value);
+    const out = $('share-out');
+    if (!r.ok) {
+      out.innerHTML = `<span class="bad">${r.error}</span>`;
+      return;
+    }
+    const d = r.data;
+    const sc = SCENARIOS.find((x) => x.id === d.scenario);
+    const cards = d.cards.map((id) => sc?.cards?.find((c) => c.id === id)?.name ?? id).join('・') || 'なし';
+    const lines = [
+      `シナリオ: ${sc ? sc.title : `${d.scenario}(このゲームにないシナリオ)`}`,
+      `シード: ${d.seed}`,
+      `結果: ${d.outcome === 'done' ? '撤退まで終えた' : '陣が落ちた'} ・ ${'★'.repeat(d.stars)}${'☆'.repeat(3 - d.stars)} ・ 得点 ${fmt(d.score)}`,
+      `帰還: 兵${d.troopsHome}人・人足${d.carriersHome}人 ・ 余剰 ${fmt(d.surplus)}`,
+      `ルールカード: ${cards}`,
+      '<span class="note">共有文字列は書き換えを見抜けません(打ち間違いや欠けだけを見つけます)。結果は自己申告として見てください。</span>',
+    ];
+    if (sc) lines.push(`<a href="${playUrl(d.scenario, d.seed)}">同じ展開で遊ぶ</a>`);
+    out.innerHTML = lines.join('<br>');
+  };
 }
 
 // ---- 入力 ----
@@ -807,6 +892,7 @@ canvas.addEventListener('click', (e) => {
 window.addEventListener('resize', resize);
 
 setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
+setupShareDialog();
 {
   const sel = $<HTMLSelectElement>('scenario');
   sel.innerHTML = SCENARIOS.map((x) => `<option value="${x.id}">${x.title}</option>`).join('');

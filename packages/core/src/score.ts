@@ -10,10 +10,12 @@ export interface Scoring {
 export const DEFAULT_SCORING: Scoring = { perPerson: 10, perSurplus: 1 };
 
 /**
- * ★の基準(仮。1-7 で見直す)。得点が満点のこの割合以上で★1・★2・★3。陣を保てなければ★0。
- * シナリオの starThresholds で変えられる
+ * ★の基準。得点が満点のこの割合以上で★1・★2・★3。陣を保てなければ★0。
+ * シナリオの starThresholds で変えられる。
+ * 2026-11-18 決定: ボット(シード1〜20)の得点の分布から、naive の★中央値が0、カードの最良で★中央値が1以上、
+ * 自動で★3がほぼ取れない(b-02 5%・b-03 0%)境目を選んだ。b-01(入門)は自動でもほぼ満点が取れるので★3が55%取れる
  */
-export const DEFAULT_STAR_THRESHOLDS: readonly [number, number, number] = [0.6, 0.8, 0.95];
+export const DEFAULT_STAR_THRESHOLDS: readonly [number, number, number] = [0.7, 0.88, 0.99];
 
 export interface ExpeditionResult {
   /** 目標日数まで陣を保てたか */
@@ -35,6 +37,8 @@ export interface ExpeditionResult {
   maxScore: number;
   /** ★の数(0〜3) */
   stars: number;
+  /** 次の★までに要る得点(★3なら null) */
+  toNextStar: number | null;
 }
 
 /** 遠征の評価。遠征中に呼んでも、その時点の値を返す。 */
@@ -81,5 +85,6 @@ export function evaluate(state: SimState): ExpeditionResult {
     score,
     maxScore,
     stars,
+    toNextStar: !held || stars >= 3 ? null : Math.max(0, th[stars as 0 | 1 | 2] * maxScore - score),
   };
 }

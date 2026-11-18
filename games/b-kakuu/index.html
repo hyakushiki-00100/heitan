@@ -16,6 +16,7 @@
       <button id="btn-speed" type="button">×1</button>
       <label class="check"><input id="chk-autopause" type="checkbox" checked /> 到着で止める</label>
       <button id="btn-glossary" type="button">用語集</button>
+      <button id="btn-share-open" type="button">共有を読む</button>
     </div>
   </header>
   <main>
@@ -50,7 +51,9 @@
   </main>
   <div id="result" hidden>
     <div class="result-box">
+      <p id="result-stars" class="stars"></p>
       <p id="result-text"></p>
+      <div id="result-share" class="share"></div>
       <button id="btn-retry" type="button">もう一度</button>
     </div>
   </div>
@@ -59,6 +62,13 @@
     <h2 tabindex="-1" autofocus>用語集</h2>
     <dl class="glossary-list"></dl>
     <button type="button" class="glossary-close">閉じる</button>
+  </dialog>
+  <dialog id="share-dialog" class="glossary">
+    <h2 tabindex="-1">共有文字列を読む</h2>
+    <p class="note">受け取った文字列(HY1-…)を貼り付けてください。</p>
+    <textarea id="share-input" rows="3" spellcheck="false"></textarea>
+    <div class="row"><button type="button" id="btn-share-read">読む</button><button type="button" class="glossary-close" id="btn-share-close">閉じる</button></div>
+    <div id="share-out"></div>
   </dialog>
   <script type="module" src="./src/main.ts"></script>
 </body>

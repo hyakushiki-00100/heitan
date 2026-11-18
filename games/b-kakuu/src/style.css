@@ -112,3 +112,11 @@ h2 { font-size: 14px; margin: 12px 0 6px; color: var(--ink-2); border-bottom: 1p
 
 .scenario-pick { font-size: 13px; display: flex; align-items: center; gap: 4px; }
 .scenario-pick select { font: inherit; font-size: 13px; padding: 4px; background: #fffaf0; border: 1px solid var(--line); border-radius: 4px; min-height: 32px; }
+
+/* ★と共有 */
+.stars { font-size: 26px; letter-spacing: 4px; color: var(--accent); margin: 0; text-align: center; }
+.stars small { display: block; font-size: 12px; letter-spacing: 0; color: var(--ink-2); }
+.share { font-size: 13px; text-align: left; margin: 8px 0 12px; }
+.share input, #share-input { width: 100%; font: 12px ui-monospace, monospace; padding: 6px; border: 1px solid var(--line); background: #fffaf0; }
+.share .row { flex-wrap: wrap; }
+#share-out { font-size: 14px; line-height: 1.7; margin-top: 8px; }
