@@ -9,16 +9,17 @@
 <body>
   <header>
     <h1>兵糧奉行 <small id="ver"></small> <small id="seed"></small></h1>
-    <label class="scenario-pick">シナリオ <select id="scenario"></select></label>
+    <label class="scenario-pick"><span class="lbl">シナリオ</span> <select id="scenario"></select></label>
     <div id="clock"></div>
     <div class="controls">
       <button id="btn-play" type="button">▶ 進める</button>
       <button id="btn-speed" type="button">×1</button>
       <label class="check"><input id="chk-autopause" type="checkbox" checked /> 到着で止める</label>
       <button id="btn-glossary" type="button">用語集</button>
-      <button id="btn-share-open" type="button">共有を読む</button>
+      <button id="btn-share-open" type="button">共有<span class="long">を読む</span></button>
     </div>
   </header>
+  <p id="rotate-hint" class="rotate-hint">横向きにすると、地図と指図を並べて見られます。<button type="button" id="btn-rotate-close" aria-label="閉じる">×</button></p>
   <main>
     <div id="map-wrap"><canvas id="map"></canvas></div>
     <aside id="panel">

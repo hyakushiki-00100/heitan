@@ -34,6 +34,7 @@ import scenario02 from '../data/scenario-02.json';
 import scenario03 from '../data/scenario-03.json';
 import { setupGlossary, t } from './glossary';
 import { daysLeftColor, draw, fmt, hitNode, type View } from './render';
+import { paperTileUrl } from './washi';
 
 const SCENARIOS = [scenario01, scenario02, scenario03] as unknown as Scenario[];
 
@@ -891,6 +892,14 @@ canvas.addEventListener('click', (e) => {
 });
 window.addEventListener('resize', resize);
 
+// ページの地に和紙の模様を敷く(描けなければ CSS の地の色のまま)
+try {
+  const tile = paperTileUrl();
+  if (tile) document.documentElement.style.setProperty('--paper-tile', `url(${tile})`);
+} catch {
+  /* 模様なしで続ける */
+}
+$('btn-rotate-close').onclick = () => ($('rotate-hint').hidden = true);
 setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
 setupShareDialog();
 $('ver').textContent = `試作 ${__APP_VERSION__}`;
