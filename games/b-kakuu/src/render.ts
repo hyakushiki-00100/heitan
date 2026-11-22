@@ -1,4 +1,4 @@
-import { armyPosition, convoyPosition, frontDaysLeft, goodsOf, marketPrice, type MapNode, type NodeKind, type SimState } from '@hyoro/core';
+import { armyPosition, convoyPosition, frontDaysLeft, type MapNode, type NodeKind, type SimState } from '@hyoro/core';
 import { drawBackground } from './washi';
 
 const C = {
@@ -35,7 +35,9 @@ function inkText(ctx: CanvasRenderingContext2D, text: string, x: number, y: numb
 export interface View {
   w: number;
   h: number;
-  pad: number;
+  /** 左右・上下の余白(上下は拠点名と下の文字が入るだけ。低い画面では地図を潰さないよう小さくする) */
+  padX: number;
+  padY: number;
 }
 
 export interface Highlight {
@@ -45,13 +47,21 @@ export interface Highlight {
   retreatNodes: string[] | null;
   /** 撤退路の途中の拠点に置いておくべき米 */
   stops: { id: string; required: number; have: number }[];
+  /** 隊を選んで行き先を待っているとき、その隊のいる拠点(ほかの拠点に「押せる」印を付ける) */
+  pickFrom: string | null;
+  /** 詳しく見ている拠点 */
+  selectedNodeId: string | null;
 }
 
 export function toScreen(v: View, n: { x: number; y: number }): { x: number; y: number } {
-  return { x: v.pad + (n.x / 100) * (v.w - 2 * v.pad), y: v.pad + (n.y / 100) * (v.h - 2 * v.pad) };
+  return { x: v.padX + (n.x / 100) * (v.w - 2 * v.padX), y: v.padY + (n.y / 100) * (v.h - 2 * v.padY) };
 }
 
-const NODE_R = 20;
+/** 拠点の丸の半径。低い地図では小さくする(setScale で決める) */
+let NODE_R = 22;
+function setScale(v: View): void {
+  NODE_R = v.h < 300 ? 17 : 22;
+}
 /**
  * 待機中の印を拠点のまわりに置く角度(度。0=右、90=下)。拠点名は真上にあるので上側を避ける。
  * 真横(0・180度)は拠点の中の「米○○」の文字にかかるので、内側の輪では使わない。
@@ -70,9 +80,25 @@ function idleOffset(k: number): { x: number; y: number } {
 
 /** 画面座標にある拠点のID。無ければ null。 */
 export function hitNode(state: SimState, v: View, x: number, y: number): string | null {
+  setScale(v);
   for (const n of state.scenario.map.nodes) {
     const p = toScreen(v, n);
     if (Math.hypot(p.x - x, p.y - y) <= NODE_R + 10) return n.id;
+  }
+  return null;
+}
+
+/** 画面座標にある、拠点で待機中の運搬隊の印のID。無ければ null */
+export function hitConvoy(state: SimState, v: View, x: number, y: number): string | null {
+  setScale(v);
+  const count = new Map<string, number>();
+  for (const c of state.convoys) {
+    if (c.dropped || c.move) continue;
+    const k = count.get(c.at) ?? 0;
+    count.set(c.at, k + 1);
+    const base = toScreen(v, state.scenario.map.nodes.find((n) => n.id === c.at)!);
+    const o = idleOffset(k);
+    if (Math.hypot(base.x + o.x - x, base.y + o.y - y) <= 14) return c.id;
   }
   return null;
 }
@@ -100,6 +126,7 @@ function avoidNodes(state: SimState, v: View, p: { x: number; y: number }, min =
 export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, alpha: number, hl: Highlight): void {
   const sc = state.scenario;
   const byId = new Map<string, MapNode>(sc.map.nodes.map((n) => [n.id, n]));
+  setScale(v);
   drawBackground(ctx, v, sc.id);
 
   // 道
@@ -163,7 +190,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     // 狭い画面では危険の名前を省く(拠点の文字と重なるため。名前は道の選択と用語集で見られる)
     const mark = l.risk ? (v.w < 600 ? '⚠' : ` ⚠${l.risk.label}`) : l.raid ? (v.w < 600 ? '⚔' : ` ⚔${l.raid.label}`) : '';
     const label = `${l.days}日${mark}`;
-    ctx.font = `${hot ? 'bold ' : ''}12px ${SERIF}`;
+    ctx.font = `${hot ? 'bold ' : ''}13px ${SERIF}`;
     const tw = ctx.measureText(label).width + 10;
     const { x: mx, y: my } = labelSpot(a, b, tw, 18, [...obstacles, ...placed]);
     placed.push({ x: mx - tw / 2, y: my - 9, w: tw, h: 18 });
@@ -196,51 +223,45 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.restore();
   }
 
-  // 拠点
+  // 拠点(数字は1つだけ。物資・市の詳しい量は拠点を押すと出る)
+  const small = v.h < 300;
   for (const n of sc.map.nodes) {
     const p = toScreen(v, n);
+    if (hl.pickFrom && n.id !== hl.pickFrom) {
+      // 行き先に選べる拠点: 朱の点線の輪
+      ctx.strokeStyle = C.bad;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, NODE_R + 6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    if (n.id === hl.selectedNodeId) {
+      ctx.strokeStyle = C.bad;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, NODE_R + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     drawNodeShape(ctx, n, p);
-    inkText(ctx, n.name, p.x, p.y - NODE_R - (n.kind === 'depot' ? 17 : 12), C.ink, `bold 14px ${SERIF}`, 4);
+    const name = state.markets[n.id] ? `${n.name}・市` : n.name;
+    inkText(ctx, name, p.x, p.y - NODE_R - (n.kind === 'depot' ? 17 : 11), C.ink, `bold ${small ? 14 : 15}px ${SERIF}`, 4);
     const rice = state.rice[n.id] ?? 0;
-    // 円(四角)の中に収まるよう、100以上は小数を出さない
-    ctx.font = `bold 12px ${SERIF}`;
+    // 丸(四角)の中に収まるよう、100以上は小数を出さない。小さい丸では「米」を省く
+    ctx.font = `bold ${small ? 12 : 13}px ${SERIF}`;
     ctx.fillStyle = C.ink;
-    ctx.fillText(`米${rice >= 100 ? Math.round(rice) : fmt(rice)}`, p.x, p.y + 0.5);
-    // 円の下に行を積む: あと何日 → 撤退用の置き米 → 物資の量
-    let below = p.y + NODE_R + 12;
+    const num = rice >= 100 ? String(Math.round(rice)) : fmt(rice);
+    ctx.fillText(small ? num : `米${num}`, p.x, p.y + 0.5);
+    // 丸の下は1行だけ: 陣なら「あと何日」、撤退前なら撤退路の置き米
+    const below = p.y + NODE_R + 11;
     const left = frontDaysLeft(state, n.id).days;
+    const stop = hl.stops.find((x) => x.id === n.id && x.required > 0);
     if (left !== null) {
-      inkText(ctx, `あと${left.toFixed(1)}日`, p.x, below, daysLeftColor(left), `bold 13px ${SERIF}`, 4);
-      below += 15;
-    }
-    const stop = hl.stops.find((x) => x.id === n.id);
-    if (stop && stop.required > 0) {
+      inkText(ctx, `あと${left.toFixed(1)}日`, p.x, below, daysLeftColor(left), `bold 14px ${SERIF}`, 4);
+    } else if (stop) {
       const ok = stop.have + 1e-9 >= stop.required;
-      inkText(ctx, `撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, below, ok ? C.ok : C.bad, `bold 12px ${SERIF}`, 4);
-      below += 15;
-    }
-    const goodsText = goodsOf(sc)
-      .map((g) => ({ g, v: state.goods[g.id]![n.id] ?? 0 }))
-      .filter((x) => x.v > 1e-9)
-      // 狭い画面では、名前を1文字・数字を整数にして短くする(隣の拠点に文字がかかるため)
-      .map((x) => (v.w < 600 ? `${x.g.name[0]}${Math.round(x.v)}` : `${x.g.name}${fmt(x.v)}`))
-      .join(' ');
-    // 市: 残りの米と今の米価
-    const mk = state.markets[n.id];
-    const price = marketPrice(state, n.id);
-    if (mk && price !== null) {
-      inkText(ctx, v.w < 600 ? `市${Math.round(mk.left)}` : `市 米${Math.round(mk.left)} 価${price.toFixed(2)}`, p.x, below, C.accent, `bold 11px ${SERIF}`, 4);
-      below += 14;
-    }
-    if (goodsText) {
-      // 待機中の隊の印(拠点の周り、半径 NODE_R+12 に置く)と重ならないよう、その外側に書く
-      const idleHere = state.convoys.some((c) => !c.move && !c.dropped && c.at === n.id);
-      if (idleHere) {
-        const n2 = state.convoys.filter((c) => !c.move && !c.dropped && c.at === n.id).length;
-        const rings = Math.ceil(n2 / IDLE_ANGLES.length);
-        below = Math.max(below, p.y + NODE_R + 12 + (rings - 1) * IDLE_RING_GAP + 10 + 12);
-      }
-      inkText(ctx, goodsText, p.x, below, C.ink2, `bold 11px ${SERIF}`, 4);
+      inkText(ctx, `撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, below, ok ? C.ok : C.bad, `bold 13px ${SERIF}`, 4);
     }
   }
 
@@ -310,7 +331,7 @@ function drawConvoyMark(
   selected: boolean,
   cargoText: string | null,
 ): void {
-  ctx.font = 'bold 11px sans-serif';
+  ctx.font = 'bold 12px sans-serif';
   const w = Math.max(20, ctx.measureText(label).width + 10);
   const shape = () => {
     ctx.beginPath();
@@ -334,7 +355,7 @@ function drawConvoyMark(
   ctx.fillText(label, p.x, p.y + 0.5);
   if (cargoText) {
     ctx.textAlign = 'left';
-    inkText(ctx, cargoText, p.x + w / 2 + 4, p.y, C.ink, `bold 11px ${SERIF}`, 3.5);
+    inkText(ctx, cargoText, p.x + w / 2 + 4, p.y, C.ink, `bold 12px ${SERIF}`, 3.5);
     ctx.textAlign = 'center';
   }
 }
@@ -401,7 +422,7 @@ function armyBanner(ctx: CanvasRenderingContext2D, state: SimState, v: View, alp
   const a = state.army;
   let p = toScreen(v, armyPosition(state, alpha));
   const label = a.move ? `兵${a.troops} 米${fmt(a.cargo)}` : `兵${a.troops}`;
-  ctx.font = `bold 12px ${SERIF}`;
+  ctx.font = `bold 13px ${SERIF}`;
   const w = ctx.measureText(label).width + 14;
   // 札は横長なので、半分の幅ぶん余分に離す
   if (!a.move) {
@@ -468,17 +489,14 @@ function nodeObstacles(ctx: CanvasRenderingContext2D, state: SimState, v: View, 
     const p = toScreen(v, n);
     const R = NODE_R + 3;
     out.push({ x: p.x - R, y: p.y - R - (n.kind === 'depot' ? 9 : 0), w: R * 2, h: R * 2 + (n.kind === 'depot' ? 9 : 0) });
-    ctx.font = `bold 14px ${SERIF}`;
-    const nw = ctx.measureText(n.name).width + 6;
-    const ny = p.y - NODE_R - (n.kind === 'depot' ? 17 : 12);
+    ctx.font = `bold 15px ${SERIF}`;
+    const nw = ctx.measureText(state.markets[n.id] ? `${n.name}・市` : n.name).width + 6;
+    const ny = p.y - NODE_R - (n.kind === 'depot' ? 17 : 11);
     out.push({ x: p.x - nw / 2, y: ny - 9, w: nw, h: 18 });
-    // 下の文字の行数(あと何日・撤退用・市・物資)。幅は大きめに見積もる
-    let rows = 0;
-    if (frontDaysLeft(state, n.id).days !== null) rows++;
-    if (hl.stops.some((x) => x.id === n.id && x.required > 0)) rows++;
-    if (state.markets[n.id]) rows++;
-    if (goodsOf(state.scenario).some((g) => (state.goods[g.id]![n.id] ?? 0) > 1e-9)) rows++;
-    if (rows) out.push({ x: p.x - 45, y: p.y + NODE_R + 3, w: 90, h: rows * 15 });
+    // 丸の下の1行(あと何日・撤退用)
+    if (frontDaysLeft(state, n.id).days !== null || hl.stops.some((x) => x.id === n.id && x.required > 0)) {
+      out.push({ x: p.x - 45, y: p.y + NODE_R + 3, w: 90, h: 16 });
+    }
     for (let k = 0; k < (idle.get(n.id) ?? 0); k++) {
       const o = idleOffset(k);
       out.push({ x: p.x + o.x - 11, y: p.y + o.y - 11, w: 22, h: 22 });

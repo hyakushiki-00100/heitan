@@ -33,7 +33,7 @@ import scenario01 from '../data/scenario-01.json';
 import scenario02 from '../data/scenario-02.json';
 import scenario03 from '../data/scenario-03.json';
 import { setupGlossary, t } from './glossary';
-import { daysLeftColor, draw, fmt, hitNode, type View } from './render';
+import { daysLeftColor, draw, fmt, hitConvoy, hitNode, type View } from './render';
 import { paperTileUrl } from './washi';
 
 const SCENARIOS = [scenario01, scenario02, scenario03] as unknown as Scenario[];
@@ -69,6 +69,25 @@ let routeIdx = 0;
 let dispatchedOnce = false;
 let seed = 0;
 
+/** 札(シート)に出している中身。null なら札は閉じていて、地図が画面いっぱい */
+type Pane = 'order' | 'node' | 'convoys' | 'retreat' | 'cards' | 'log' | 'menu';
+let pane: Pane | null = null;
+/** 拠点の札で見ている拠点 */
+let nodeSel: string | null = null;
+/** 閉じた説明の文。文が変わったらまた出す */
+let hintClosed = '';
+/** 今出している説明の文 */
+let hintNow = '';
+const PANE_TITLE: Record<Pane, string> = {
+  order: '指図',
+  node: '拠点',
+  convoys: '運搬隊',
+  retreat: '撤退の備え',
+  cards: 'ルールカードと自動便',
+  log: '報告',
+  menu: 'メニュー',
+};
+
 /** URL の ?seed= があればそれを使い、なければ遊ぶたびに変える */
 function pickSeed(): number {
   const q = new URLSearchParams(location.search).get('seed');
@@ -88,6 +107,9 @@ function reset(): void {
   dest = null;
   dispatchedOnce = false;
   orderKey = '';
+  pane = null;
+  nodeSel = null;
+  hintClosed = '';
   bestLine = null;
   $('result-share').dataset.code = '';
   $('result').hidden = true;
@@ -96,7 +118,10 @@ function reset(): void {
 
 function view(): View {
   const r = canvas.getBoundingClientRect();
-  return { w: r.width, h: r.height, pad: Math.max(48, Math.min(r.width, r.height) * 0.1) };
+  // 上下の余白は拠点名と丸の下の1行が入るだけにする(低い画面で地図が潰れないように)
+  const padY = Math.max(36, Math.min(60, r.height * 0.13));
+  const padX = Math.max(40, Math.min(80, r.width * 0.08));
+  return { w: r.width, h: r.height, padX, padY };
 }
 
 function resize(): void {
@@ -105,6 +130,12 @@ function resize(): void {
   canvas.width = Math.round(r.width * dpr);
   canvas.height = Math.round(r.height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/** 手動の隊を選んで行き先を待っているなら、その隊のいる拠点 */
+function pickingFrom(): string | null {
+  const c = selectedConvoy();
+  return c && !c.move && !c.auto && !dest && state.outcome === 'playing' ? c.at : null;
 }
 
 function nodeName(id: string): string {
@@ -179,8 +210,6 @@ function setDest(id: string): void {
     }
   }
   renderPanel();
-  // スマホでは出発ボタンが画面外に出やすいので、見える位置までスクロールする
-  document.getElementById('btn-go')?.scrollIntoView({ block: 'nearest' });
 }
 
 // ---- 進行 ----
@@ -218,6 +247,8 @@ function tick(now: number): void {
     routeNodes: r?.nodes ?? null,
     retreatNodes: plan?.route.nodes ?? null,
     stops: plan?.stops ?? [],
+    pickFrom: pickingFrom(),
+    selectedNodeId: pane === 'node' ? nodeSel : null,
   });
   requestAnimationFrame(tick);
 }
@@ -248,14 +279,14 @@ function renderClock(): void {
     const left = d.days ?? 0;
     const by = goodsOf(sc).length ? `(${d.limiting})` : '';
     html +=
-      `撤退開始まで ${fmt(Math.max(0, sc.goalDays - day))}日 ・ ${nodeName(a.at)} ` +
+      `撤退まで ${fmt(Math.max(0, sc.goalDays - day))}日 ・ 陣 ` +
       `<b style="color:${daysLeftColor(left)}">${t('あと何日分', `あと${left.toFixed(1)}日分${by}`)}</b>`;
     for (const h of d.health) {
       // 米・薪より先に尽きるときだけ出す(同じ日数なら出さない。0.05日は浮動小数の誤差よけ)
       if (h.days !== null && h.days < left - 0.05) html += ` ・ <span style="color:${daysLeftColor(h.days)}">${h.name} あと${h.days.toFixed(1)}日</span>`;
     }
   } else if (a.phase === 'retreat') {
-    html += `<b>撤退中</b> 兵${a.troops}人・${amountsText(a.cargo, a.goods)} ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
+    html += `<b>撤退中</b> 兵${a.troops}人 ・ 蔵まで あと${fmt(armyDaysToHome(state) ?? 0)}日`;
   } else if (a.phase === 'home') {
     html += `軍勢は蔵に戻った(兵${a.troops}人)`;
   } else {
@@ -323,42 +354,86 @@ function renderRetreat(): void {
   });
 }
 
-/** 市の欄(市のないシナリオでは隠す) */
-function renderMarkets(): void {
-  const sec = $('markets-sec');
-  const ids = Object.keys(state.markets);
-  sec.hidden = ids.length === 0;
-  if (!ids.length) return;
-  const rows: string[] = [
-    `<div class="note">${t('市')}で米を買えます。買った米はその拠点に置かれ、運搬隊が運びます。払った額は${t('余剰', '村への負担')}として減点になり、買うほど${t('米価')}が上がります。</div>`,
-  ];
-  for (const id of ids) {
-    const m = state.markets[id]!;
+/** 拠点の札: 在庫・あと何日・置き米・市・ここにいる隊 */
+function renderNode(): void {
+  const box = $('node-body');
+  const id = nodeSel;
+  if (!id) {
+    box.innerHTML = '';
+    return;
+  }
+  const sc = state.scenario;
+  const am = nodeAmounts(state, id);
+  const rice = am.rice ?? 0;
+  delete am.rice;
+  const rows: string[] = [`<p class="order-head"><b>${nodeName(id)}</b></p>`, `<div class="stock">${amountsText(rice, am)}</div>`];
+  const d = frontDaysLeft(state, id);
+  if (d.days !== null) {
+    rows.push(`<div class="stock">${t('あと何日分')}: <b style="color:${daysLeftColor(d.days)}">${d.days.toFixed(1)}日</b>${goodsOf(sc).length ? `(${d.limiting}で決まる)` : ''}</div>`);
+    for (const h of d.health) if (h.days !== null) rows.push(`<div class="stock">${h.name}: あと${h.days.toFixed(1)}日</div>`);
+  }
+  if (state.army.phase === 'hold') {
+    const stop = retreatPlan(state).stops.find((x) => x.id === id && x.required > 0);
+    if (stop) {
+      const ok = stop.have + EPS >= stop.required;
+      rows.push(`<div class="stock">撤退用の${t('置き米')}: <span class="${ok ? 'good' : 'bad'}">${fmt(stop.have)}/${fmt(stop.required)}${ok ? ' ✓' : ''}</span></div>`);
+    }
+  }
+  const m = state.markets[id];
+  if (m) {
     const price = marketPrice(state, id)!;
     const btn = (n: number) => {
       const amt = Math.min(n, m.left);
       const ok = amt > EPS && state.outcome === 'playing';
-      return `<button type="button" data-buy="${id}" data-amt="${amt}" ${ok ? '' : 'disabled'}>${fmt(amt)}買う(負担${ok ? fmt(purchaseCost(state, id, amt)) : '-'})</button>`;
+      return `<button type="button" data-buy="${amt}" ${ok ? '' : 'disabled'}>${fmt(amt)}買う(負担${ok ? fmt(purchaseCost(state, id, amt)) : '-'})</button>`;
     };
     rows.push(
-      `<div class="row"><b>${nodeName(id)}</b> 残り 米${fmt(m.left)} ・ 米価 ${price.toFixed(2)}</div>`,
-      `<div class="row">${btn(10)}${btn(25)}</div>`,
+      `<h3>${t('市')}</h3>`,
+      `<div class="stock">残り 米${fmt(m.left)} ・ ${t('米価')} ${price.toFixed(2)}</div>`,
+      `<div class="row wrap">${btn(10)}${btn(25)}</div>`,
+      `<div class="note">買った米はここに置かれ、運搬隊が運びます。払った額は村への負担として減点。買うほど米価が上がります。</div>`,
     );
   }
   for (const o of state.orders) {
-    const left = (o.arriveStep - state.step) * state.scenario.stepDays;
+    if (o.from !== id && o.to !== id) continue;
+    const left = (o.arriveStep - state.step) * sc.stepDays;
     rows.push(`<div class="note">${nodeName(o.from)}の村人が${nodeName(o.to)}へ米${fmt(o.rice)}を運んでいる(あと${fmt(left)}日)</div>`);
   }
-  if (state.purchaseBurden > 0) rows.push(`<div class="note">これまでに市で払った負担: ${fmt(state.purchaseBurden)}</div>`);
-  const box = $('markets');
+  const here = state.convoys.filter((c) => !c.dropped && !c.move && c.at === id);
+  if (here.length) {
+    rows.push(
+      '<h3>ここにいる運搬隊</h3><div class="dests">' +
+        here.map((c) => `<button type="button" data-pick="${c.id}">${state.convoys.indexOf(c) + 1}. ${c.name}${c.auto ? '(自動)' : ''}</button>`).join('') +
+        '</div>',
+    );
+  }
   box.innerHTML = rows.join('');
   box.querySelectorAll<HTMLButtonElement>('[data-buy]').forEach((b) => {
     b.onclick = () => {
-      const r = buyLocal(state, b.dataset.buy!, Number(b.dataset.amt));
+      const r = buyLocal(state, id, Number(b.dataset.buy));
       if (!r.ok) alert(r.error);
       renderPanel();
     };
   });
+  box.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) => (b.onclick = () => selectConvoy(b.dataset.pick!)));
+}
+
+/** 隊を選び、指図の札を開く */
+function selectConvoy(id: string): void {
+  selected = id;
+  dest = null;
+  pane = 'order';
+  renderPanel();
+}
+
+/** 札を開く・閉じる(同じものを押したら閉じる) */
+function openPane(p: Pane | null): void {
+  pane = pane === p ? null : p;
+  if (pane !== 'order') {
+    selected = null;
+    dest = null;
+  }
+  renderPanel();
 }
 
 /** ルールカードと自動便の欄 */
@@ -419,21 +494,27 @@ function renderHint(): void {
   let hint: string;
   // 自動の隊だけで動かした場合も、最初の説明は済んだものとする
   if (state.convoys.some((c) => c.move)) dispatchedOnce = true;
-  if (!dispatchedOnce) {
-    const goods = goodsOf(state.scenario);
-    hint =
-      `${t('運搬隊')}を選び、行き先に<b>前線の${t('陣')}</b>を選んで出発させてください。<br>${t('人足')}も道中で米を食べます。<b>遠いほど、届く量が減ります。</b>` +
-      (goods.length ? `<br>このシナリオでは米のほかに${goods.map((g) => t(g.name)).join('と')}も運びます。` : '');
+  const c = selectedConvoy();
+  if (pickingFrom()) {
+    hint = '行き先の拠点(点線の輪)を押してください。';
+  } else if (c && dest) {
+    hint = '積む量を決めて「出発」を押してください。';
+  } else if (!dispatchedOnce) {
+    hint = `蔵のまわりの番号(${t('運搬隊')})を押し、行き先に<b>前線の${t('陣')}</b>を押してください。運ぶ人も道中で米を食べます。<b>遠いほど届く量が減ります。</b>`;
   } else if (a.phase === 'retreat') {
-    hint = `${t('撤退')}中です。蔵の外に残った${t('運搬隊')}は<b>帰還に数えません</b>。${t('帰り分')}を持たせて蔵へ戻してください。`;
+    hint = `${t('撤退')}中です。蔵の外に残った隊は帰還に数えません。${t('帰り分')}を持たせて蔵へ戻してください。`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
-    hint = `${fmt(goal)}日目に${t('撤退')}が始まります。<b>撤退路の拠点に${t('置き米')}をし</b>、陣にいる${t('運搬隊')}は早めに蔵へ戻してください。`;
-  } else if (!running && state.convoys.some((c) => c.move)) {
+    hint = `${fmt(goal)}日目に${t('撤退')}が始まります。「撤退」の札で、撤退路に置く米を確かめてください。`;
+  } else if (!running && state.convoys.some((x) => x.move)) {
     hint = '▶ で時を進めます。';
   } else {
-    hint = `陣に着いた隊は、${t('帰り分')}の米を持たせないと戻れません。途中の拠点で${t('中継')}することもできます。<br>慣れてきたら、${t('ルールカード')}を選んで運搬隊を自動にできます。`;
+    hint = '';
   }
-  $('hint').innerHTML = hint;
+  const box = $('hint');
+  hintNow = hint;
+  $('hint-text').innerHTML = hint;
+  // 札が開いている間は出さない(札に同じことが書いてあり、低い画面では地図が狭くなるため)
+  box.hidden = !hint || hint === hintClosed || state.outcome !== 'playing' || pane !== null;
 }
 
 function renderPanel(): void {
@@ -441,10 +522,19 @@ function renderPanel(): void {
   $('btn-play').textContent = running ? '❚❚ 止める' : '▶ 進める';
   ($('btn-play') as HTMLButtonElement).disabled = state.outcome !== 'playing';
   $('btn-speed').textContent = `×${SPEEDS[speedIdx]}`;
+  if (pane === 'order' && !selectedConvoy()) pane = null;
+  // 札の開閉。開け閉めで地図の大きさが変わるので、描き直しの大きさは ResizeObserver で合わせる
+  $('sheet').hidden = pane === null;
+  $('sheet-title').textContent = pane ? PANE_TITLE[pane] : '';
+  document.querySelectorAll<HTMLElement>('[data-pane]').forEach((el) => (el.hidden = el.dataset.pane !== pane));
+  document.querySelectorAll<HTMLButtonElement>('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === pane));
+  // 撤退前に置き米が足りない拠点があれば、「撤退」の札を目立たせる
+  const short = state.army.phase === 'hold' && currentDay(state) >= state.scenario.goalDays - 6 && retreatPlan(state).stops.some((x) => x.required > 0 && x.have + EPS < x.required);
+  document.querySelector('[data-tab="retreat"]')!.classList.toggle('alert', short);
   renderHint();
   renderRetreat();
   renderCards();
-  renderMarkets();
+  renderNode();
 
   const box = $('convoys');
   box.innerHTML = '';
@@ -461,11 +551,7 @@ function renderPanel(): void {
     const autoTag = c.auto && !c.dropped ? '<span class="auto-tag">自動</span>' : '';
     const who = c.horses > 0 ? `人足${c.carriers}・馬${c.horses}` : `人足${c.carriers}`;
     b.innerHTML = `<span>${i + 1}. ${c.name}(${who})${autoTag}</span><span class="st">${where}</span>`;
-    b.onclick = () => {
-      selected = c.id === selected ? null : c.id;
-      dest = null;
-      renderPanel();
-    };
+    b.onclick = () => selectConvoy(c.id);
     box.appendChild(b);
   });
 
@@ -495,41 +581,40 @@ function previewHtml(nodes: string[]): string {
     Object.entries(goodsLoad).map(([k, v]) => [k, k === fgId ? Math.max(0, v - p.fodderNeed) : v]),
   );
   const scaled = (f: number) => Object.fromEntries(Object.entries(arriveGoods).map(([k, v]) => [k, v * f]));
-  const lines = [
-    `道: ${nodes.map(nodeName).join(' → ')}(${fmt(p.route.days)}日)`,
-    `人足${c.carriers}人 × ${fmt(ration)} × ${fmt(p.route.days)}日 = 道中で米 <b class="num">${fmt(p.eat)}</b> 食べる`,
-  ];
-  if (goodsTotal > EPS) lines.push(`積荷の合計 <b class="num">${fmt(load + goodsTotal)}</b> / ${fmt(convoyCapacity(state, c))}`);
+  // 大事な「着く量」を先に、短く書く。計算の内訳は小さな字で最後に
+  const lines: string[] = [];
+  const eatNote = `<span class="note">道中で人足が米${fmt(p.eat)}を食べる(${c.carriers}人×${fmt(ration)}×${fmt(p.route.days)}日)</span>`;
   const fg = fodderGood(state.scenario);
   if (fg && c.horses > 0) {
     const have = goodsLoad[fg.id] ?? 0;
     const carriersCap = c.carriers * state.scenario.carrierCapacity;
-    lines.push(`馬${c.horses}頭 × ${state.scenario.horse!.fodderPerDay} × ${fmt(p.route.days)}日 = ${t(fg.name)} <b class="num">${fmt(p.fodderNeed)}</b> 要る(積んだ ${fmt(have)})`);
     if (have + EPS < p.fodderNeed && load + goodsTotal > carriersCap + EPS) {
-      lines.push(`<span class="bad">道中で${fg.name}が尽きると馬が運べなくなり、人足だけで運べる${carriersCap}を超える荷を捨てます。</span>`);
       // 荷を捨てるので、満載で届くような到着量は出さない
-      lines.push(`到着は人足が運べる <b class="num">${carriersCap}</b> 以下`);
+      lines.push(
+        `<span class="bad">${t(fg.name)}が足りない(要る${fmt(p.fodderNeed)}・積んだ${fmt(have)})。道中で馬が運べなくなり、${carriersCap}を超える荷を捨てます。</span>`,
+        eatNote,
+      );
       return lines.join('<br>');
     }
+    lines.push(`<span class="note">馬が道中で${fg.name}${fmt(p.fodderNeed)}を食べる(積んだ${fmt(have)})</span>`);
   }
   if (p.arrive + EPS < 0) {
-    lines.push(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(積み荷も失われます)。</span>`);
+    lines.unshift(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(荷も失う)。</span>`);
   } else if (!p.risks.length && !p.raids.length) {
-    lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
+    lines.unshift(`到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
   } else {
     const r = [
-      ...p.risks.map((x) => `${x.risk.label}(${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う)`),
-      ...p.raids.map(
-        (x) => `${x.raid.label}(${nodeName(x.a)}→${nodeName(x.b)}にいる間、1日${Math.round(x.raid.chancePerDay * 100)}%で襲われ荷の${Math.round(x.raid.loss * 100)}%を失う。何度も起こりうる)`,
-      ),
+      ...p.risks.map((x) => `${x.risk.label} ${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う`),
+      ...p.raids.map((x) => `${x.raid.label} 1日${Math.round(x.raid.chancePerDay * 100)}%で襲われ荷の${Math.round(x.raid.loss * 100)}%を失う(何度も)`),
     ].join('・');
-    lines.push(`出発 <b class="num">${amountsText(load, goodsLoad)}</b> → 無事なら <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
-    lines.push(
+    lines.unshift(
+      `無事なら到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`,
       p.arriveWorst + EPS >= 0
-        ? `<span class="warn">⚠ ${r}。${p.raids.length ? 'それぞれ1回' : ''}起きれば到着 <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
+        ? `<span class="warn">⚠ ${r} → ${p.raids.length ? '各1回' : ''}起きれば <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
         : `<span class="bad">⚠ ${r}。起きると道中で食料が尽き、人足が離脱します。</span>`,
     );
   }
+  lines.push(eatNote);
   return lines.join('<br>');
 }
 
@@ -566,14 +651,12 @@ function currentOrderKey(): string {
 
 function renderOrder(): void {
   orderKey = currentOrderKey();
-  const sec = $('order');
   const body = $('order-body');
   const c = selectedConvoy();
   if (!c || state.outcome !== 'playing') {
-    sec.hidden = true;
+    body.innerHTML = '';
     return;
   }
-  sec.hidden = false;
   const autoBtn = `<div class="row"><button type="button" id="btn-auto">${c.auto ? 'この隊を手動に戻す' : 'この隊を自動にする'}</button></div>`;
   const bindAuto = () => {
     $('btn-auto').onclick = () => {
@@ -593,13 +676,24 @@ function renderOrder(): void {
     return;
   }
   const sc = state.scenario;
-  const parts: string[] = [`<div>${nodeName(c.at)}から、行き先を選ぶ(地図の拠点をクリックしても選べます)</div><div class="dests">`];
-  for (const n of sc.map.nodes) {
-    if (n.id === c.at) continue;
-    parts.push(`<button type="button" data-dest="${n.id}" class="${n.id === dest ? 'selected' : ''}">${n.name}</button>`);
-  }
-  parts.push('</div>');
-
+  const idx = state.convoys.indexOf(c) + 1;
+  const who = c.horses > 0 ? `人足${c.carriers}・馬${c.horses}` : `人足${c.carriers}`;
+  // 行き先が決まったら、見積もりと「出発」を先頭に出す(狭い画面でスクロールせずに押せるように)。
+  // 行き先・隊の切り替えは、決まったあとは畳んでおく
+  const head = `<p class="order-head"><b>${idx}. ${c.name}</b>(${who})・${nodeName(c.at)}${dest ? ` → <b>${nodeName(dest)}</b>` : 'にいる'}</p>`;
+  const others = state.convoys.filter((x) => x !== c && !x.dropped && !x.move && !x.auto && x.at === c.at);
+  const switchHtml = others.length
+    ? '<div class="row wrap">隊を替える: ' + others.map((x) => `<button type="button" data-pick="${x.id}">${state.convoys.indexOf(x) + 1}</button>`).join('') + '</div>'
+    : '';
+  const destHtml =
+    '<div class="dests">' +
+    sc.map.nodes
+      .filter((n) => n.id !== c.at)
+      .map((n) => `<button type="button" data-dest="${n.id}" class="${n.id === dest ? 'selected' : ''}">${n.name}</button>`)
+      .join('') +
+    '</div>';
+  const parts: string[] = [head];
+  if (!dest) parts.push('<div class="note">行き先の拠点を地図で押すか、ここで選んでください。</div>', destHtml, switchHtml);
   const route = currentRoute();
   const opts = routeOptions();
   let safe: number | null = null;
@@ -624,29 +718,40 @@ function renderOrder(): void {
     const safeNeed = risky ? safeLoad(route.nodes, cap) : null;
     const needsBuffer = risky && (safeNeed === null || safeNeed > eat + EPS);
     safe = needsBuffer && safeNeed !== null && safeNeed <= max + EPS ? safeNeed : null;
+    const routeHtml =
+      opts.length > 1
+        ? '<h3>道</h3><div class="dests">' +
+          opts
+            .map((r, i) => `<button type="button" data-route="${i}" class="${r === route ? 'selected' : ''}">${routeLabel(r.nodes, r.days)}</button>`)
+            .join('') +
+          '</div>'
+        : '';
     parts.push(
-      '<div>道を選ぶ:</div><div class="dests">' +
-        opts
-          .map(
-            (r, i) =>
-              `<button type="button" data-route="${i}" class="${r === route ? 'selected' : ''}">${routeLabel(r.nodes, r.days)}</button>`,
-          )
-          .join('') +
-        '</div>',
-      `<div class="row">積む米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
-      ...goodsOf(sc).map(
-        (g) =>
-          `<div class="row">積む${t(g.name)} <input data-good="${g.id}" type="range" min="0" max="${Math.min(here[g.id] ?? 0, cap)}" step="0.5" value="${goodsLoad[g.id] ?? 0}" /> <b data-good-val="${g.id}" class="num">${fmt(goodsLoad[g.id] ?? 0)}</b></div>`,
-      ),
-      `<div class="row"><button type="button" id="load-full">${goodsOf(sc).length ? '残りを米で満載' : `満載(${fmt(max)})`}</button>` +
+      `<div id="preview" class="preview">${previewHtml(route.nodes)}</div>`,
+      `<button type="button" id="btn-go" class="primary big-go">出発させる</button>`,
+      '<h3>積む量</h3>',
+      `<div class="row">米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
+      `<div class="row wrap"><button type="button" id="load-full">${goodsOf(sc).length ? '残りを米で満載' : `満載(${fmt(max)})`}</button>` +
         (goodsOf(sc).length ? '<button type="button" id="load-mix">陣の割合で満載</button>' : '') +
         `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button>` +
         (needsBuffer
           ? `<button type="button" id="load-safe" ${safe === null ? 'disabled' : ''}>荷を失っても尽きない分${safeNeed === null ? '' : `(${fmt(safeNeed)})`}</button>`
           : '') +
         '</div>',
-      `<div id="preview" class="preview">${previewHtml(route.nodes)}</div>`,
-      `<button type="button" id="btn-go" class="primary">出発させる</button>`,
+      ...(goodsOf(sc).length
+        ? [
+            `<details><summary>米以外(${goodsOf(sc).map((g) => g.name).join('・')})を細かく決める</summary>` +
+              goodsOf(sc)
+                .map(
+                  (g) =>
+                    `<div class="row">${t(g.name)} <input data-good="${g.id}" type="range" min="0" max="${Math.min(here[g.id] ?? 0, cap)}" step="0.5" value="${goodsLoad[g.id] ?? 0}" /> <b data-good-val="${g.id}" class="num">${fmt(goodsLoad[g.id] ?? 0)}</b></div>`,
+                )
+                .join('') +
+              '</details>',
+          ]
+        : []),
+      routeHtml,
+      `<details><summary>行き先・隊を替える</summary>${destHtml}${switchHtml}</details>`,
     );
   }
   parts.push(autoBtn);
@@ -654,6 +759,7 @@ function renderOrder(): void {
   bindAuto();
 
   body.querySelectorAll<HTMLButtonElement>('[data-dest]').forEach((b) => (b.onclick = () => setDest(b.dataset.dest!)));
+  body.querySelectorAll<HTMLButtonElement>('[data-pick]').forEach((b) => (b.onclick = () => selectConvoy(b.dataset.pick!)));
   body.querySelectorAll<HTMLButtonElement>('[data-route]').forEach(
     (b) =>
       (b.onclick = () => {
@@ -732,6 +838,7 @@ function renderOrder(): void {
     dispatchedOnce = true;
     selected = null;
     dest = null;
+    pane = null;
     renderPanel();
   };
 }
@@ -875,22 +982,45 @@ $('btn-speed').onclick = () => {
 $('btn-retry').onclick = reset;
 canvas.addEventListener('click', (e) => {
   const r = canvas.getBoundingClientRect();
-  const id = hitNode(state, view(), e.clientX - r.left, e.clientY - r.top);
-  if (!id) return;
+  const x = e.clientX - r.left;
+  const y = e.clientY - r.top;
+  const v = view();
   const c = selectedConvoy();
-  if (c && !c.move && id !== c.at) {
+  const id = hitNode(state, v, x, y);
+  // 隊を選んでいるときは、ほかの拠点を押すと行き先になる
+  if (c && !c.move && !c.auto && id && id !== c.at) {
     setDest(id);
     return;
   }
-  // 隊を選んでいなければ、その拠点で待機中の最初の隊を選ぶ
-  const idle = state.convoys.find((x) => !x.move && !x.dropped && x.at === id);
-  if (idle) {
-    selected = idle.id;
-    dest = null;
-    renderPanel();
+  // 待機中の隊の印を押したら、その隊を選ぶ
+  const cid = hitConvoy(state, v, x, y);
+  if (cid) {
+    selectConvoy(cid);
+    return;
   }
+  if (!id) return;
+  // 拠点を押したら、そこにいる手動の隊を選ぶ(選んでいる隊の拠点なら、次の隊へ)。いなければ拠点の札を開く
+  const idle = state.convoys.filter((x) => !x.move && !x.dropped && !x.auto && x.at === id);
+  if (idle.length && state.outcome === 'playing' && !(c && c.at === id && idle.length === 1)) {
+    const k = c ? idle.indexOf(c) : -1;
+    selectConvoy(idle[(k + 1) % idle.length]!.id);
+    return;
+  }
+  selected = null;
+  dest = null;
+  nodeSel = id;
+  pane = 'node';
+  renderPanel();
 });
-window.addEventListener('resize', resize);
+// 札の開け閉め・画面の向きの変更で地図の大きさが変わるので、大きさの変化を見て合わせる
+new ResizeObserver(() => resize()).observe($('map-wrap'));
+document.querySelectorAll<HTMLButtonElement>('.tab').forEach((b) => (b.onclick = () => openPane(b.dataset.tab as Pane)));
+$('btn-sheet-close').onclick = () => openPane(null);
+$('btn-hint-close').onclick = () => {
+  hintClosed = hintNow;
+  $('hint').hidden = true;
+};
+$('btn-restart').onclick = reset;
 
 // ページの地に和紙の模様を敷く(描けなければ CSS の地の色のまま)
 try {
@@ -899,7 +1029,6 @@ try {
 } catch {
   /* 模様なしで続ける */
 }
-$('btn-rotate-close').onclick = () => ($('rotate-hint').hidden = true);
 setupGlossary($('tip'), $<HTMLDialogElement>('glossary'), $('btn-glossary'));
 setupShareDialog();
 $('ver').textContent = `試作 ${__APP_VERSION__}`;

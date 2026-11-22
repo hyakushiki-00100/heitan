@@ -2,7 +2,9 @@
  * ビルドしたゲームを Playwright で開き、各シナリオの場面を out/screenshots/ に保存する(CLAUDE.md §9-2)。
  * 使い方: npm run screenshots
  * 撮る場面: 1 軍議(開始時) / 2 出陣中 / 3 撤退直前(決戦直前) / 4 撤退中 / 5 結果。
- * 画面は PC・スマホ横向き(主に遊ぶ向き)で全場面、スマホ縦向きで 1・2・5 を撮る
+ * 画面は PC・スマホ横向きで全場面、スマホ縦向きで 1・2・5 を撮る。
+ * スマホは、ブラウザのタブ列と claude.ai などの枠で実際に使える高さが減る(横向きで約220px。2026-11-20 の実機の画像)ので、
+ * 端末の画面全体ではなく、減った高さで撮る
  * 場面を進めるため、全隊を自動にし「帰路分を残す」を入れて動かす(シードは 1 に固定)
  * 撮った画像は Claude が Read で開き、表示崩れ・文字の切れ・はみ出し・線の重なり・真っ黒な画面がないかを確かめる
  */
@@ -82,8 +84,8 @@ async function main(): Promise<void> {
     for (const id of scenarioIds('b-kakuu')) {
       for (const [device, opts] of [
         ['pc', { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 }],
-        ['phone', devices['iPhone 13 landscape']],
-        ['portrait', devices['iPhone 13']],
+        ['phone', { ...devices['iPhone 13 landscape'], viewport: { width: 750, height: 230 } }],
+        ['portrait', { ...devices['iPhone 13'], viewport: { width: 390, height: 600 } }],
       ] as const) {
         const ctx = await browser.newContext(opts);
         const p = await ctx.newPage();
@@ -96,8 +98,16 @@ async function main(): Promise<void> {
         await p.goto(`${BASE}?s=${id}&seed=1`);
         const name = (n: string) => `${id}-${n}-${device}`;
         await shoot(p, name('1-plan'), errors);
+        // 指図の札(いちばん使う画面): 1番の隊を選び、行き先に陣を選ぶ
+        await p.click('[data-tab="convoys"]');
+        await p.click('#convoys .convoy');
+        await p.click('#order-body [data-dest="jin"]');
+        await shoot(p, name('1b-order'), errors);
+        await p.click('#btn-sheet-close');
+        await p.click('[data-tab="cards"]');
         await p.click('#btn-all-auto');
         await p.click('[data-card="kiro"]');
+        await p.click('#btn-sheet-close');
         await p.click('#btn-speed');
         await p.click('#btn-speed');
         await runUntil(p, async () => (await day(p)) >= 3);

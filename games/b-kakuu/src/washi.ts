@@ -21,11 +21,12 @@ export const PAPER = {
 interface Box {
   w: number;
   h: number;
-  pad: number;
+  padX: number;
+  padY: number;
 }
 
 /** 地図の 0〜100 を画面の座標に(render.ts の toScreen と同じ式) */
-const sp = (v: Box, x: number, y: number) => ({ x: v.pad + (x / 100) * (v.w - 2 * v.pad), y: v.pad + (y / 100) * (v.h - 2 * v.pad) });
+const sp = (v: Box, x: number, y: number) => ({ x: v.padX + (x / 100) * (v.w - 2 * v.padX), y: v.padY + (y / 100) * (v.h - 2 * v.padY) });
 
 /** 文字列から決まった数(乱数の種に使う) */
 function hash(s: string): number {
@@ -375,7 +376,7 @@ let cache: { key: string; canvas: HTMLCanvasElement } | null = null;
 /** 背景を描く。大きさ・画素の細かさ・シナリオが同じなら、取っておいた絵を貼るだけ */
 export function drawBackground(ctx: CanvasRenderingContext2D, v: Box, scenarioId: string): void {
   const dpr = ctx.getTransform().a || 1;
-  const key = `${scenarioId}|${v.w}|${v.h}|${v.pad}|${dpr}`;
+  const key = `${scenarioId}|${v.w}|${v.h}|${v.padX}|${v.padY}|${dpr}`;
   if (!cache || cache.key !== key) {
     const c = document.createElement('canvas');
     c.width = Math.max(1, Math.round(v.w * dpr));
