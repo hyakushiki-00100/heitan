@@ -33,7 +33,7 @@ import scenario01 from '../data/scenario-01.json';
 import scenario02 from '../data/scenario-02.json';
 import scenario03 from '../data/scenario-03.json';
 import { setupGlossary, t } from './glossary';
-import { daysLeftColor, draw, fmt, hitConvoy, hitNode, type View } from './render';
+import { daysLeftColor, draw, fmt, hitIdleGroup, hitNode, type View } from './render';
 import { paperTileUrl } from './washi';
 
 const SCENARIOS = [scenario01, scenario02, scenario03] as unknown as Scenario[];
@@ -500,7 +500,7 @@ function renderHint(): void {
   } else if (c && dest) {
     hint = '積む量を決めて「出発」を押してください。';
   } else if (!dispatchedOnce) {
-    hint = `蔵のまわりの番号(${t('運搬隊')})を押し、行き先に<b>前線の${t('陣')}</b>を押してください。運ぶ人も道中で米を食べます。<b>遠いほど届く量が減ります。</b>`;
+    hint = `蔵の横の足軽(${t('運搬隊')})を押し、行き先に<b>前線の${t('陣')}</b>を押してください。運ぶ人も道中で米を食べます。<b>遠いほど届く量が減ります。</b>`;
   } else if (a.phase === 'retreat') {
     hint = `${t('撤退')}中です。蔵の外に残った隊は帰還に数えません。${t('帰り分')}を持たせて蔵へ戻してください。`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
@@ -980,6 +980,20 @@ $('btn-speed').onclick = () => {
   renderPanel();
 };
 $('btn-retry').onclick = reset;
+/** 拠点で待機中の手動の隊 */
+function idleManual(id: string) {
+  return state.convoys.filter((x) => !x.move && !x.dropped && !x.auto && x.at === id);
+}
+
+/** その拠点の手動の隊を選ぶ(選んでいる隊がそこにいれば次の隊へ)。選べなければ false */
+function cycleIdle(id: string, c: ReturnType<typeof selectedConvoy>): boolean {
+  const idle = idleManual(id);
+  if (!idle.length || state.outcome !== 'playing') return false;
+  const k = c ? idle.indexOf(c) : -1;
+  selectConvoy(idle[(k + 1) % idle.length]!.id);
+  return true;
+}
+
 canvas.addEventListener('click', (e) => {
   const r = canvas.getBoundingClientRect();
   const x = e.clientX - r.left;
@@ -992,20 +1006,11 @@ canvas.addEventListener('click', (e) => {
     setDest(id);
     return;
   }
-  // 待機中の隊の印を押したら、その隊を選ぶ
-  const cid = hitConvoy(state, v, x, y);
-  if (cid) {
-    selectConvoy(cid);
-    return;
-  }
+  // 待機中の隊の絵を押したら、その拠点の手動の隊を順に選ぶ
+  const gid = hitIdleGroup(state, v, x, y);
+  if (gid && cycleIdle(gid, c)) return;
   if (!id) return;
-  // 拠点を押したら、そこにいる手動の隊を選ぶ(選んでいる隊の拠点なら、次の隊へ)。いなければ拠点の札を開く
-  const idle = state.convoys.filter((x) => !x.move && !x.dropped && !x.auto && x.at === id);
-  if (idle.length && state.outcome === 'playing' && !(c && c.at === id && idle.length === 1)) {
-    const k = c ? idle.indexOf(c) : -1;
-    selectConvoy(idle[(k + 1) % idle.length]!.id);
-    return;
-  }
+  // 拠点の絵を押したら、拠点の札(在庫・ここにいる隊)を開く
   selected = null;
   dest = null;
   nodeSel = id;

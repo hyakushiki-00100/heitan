@@ -1,4 +1,6 @@
 import { armyPosition, convoyPosition, frontDaysLeft, type MapNode, type NodeKind, type SimState } from '@hyoro/core';
+import { decorFor } from './decor';
+import { drawNodeIcon, drawPackHorse, drawPorter, type NodeIcon } from './icons';
 import { drawBackground } from './washi';
 
 const C = {
@@ -17,8 +19,11 @@ const C = {
   army: '#7c2619',
 };
 
-/** 拠点の丸の中に薄く書く字(拠点の種類) */
-const KIND_GLYPH: Record<NodeKind, string> = { depot: '蔵', village: '里', camp: '営', pass: '峠', front: '陣' };
+/** 絵の種類がデータに無いときの、拠点の種類ごとの絵 */
+const KIND_ICON: Record<NodeKind, NodeIcon> = { depot: 'kura', village: 'mura', camp: 'kawara', pass: 'toge', front: 'jin' };
+function iconOf(state: SimState, n: MapNode): NodeIcon {
+  return decorFor(state.scenario.id)?.icons[n.id] ?? KIND_ICON[n.kind];
+}
 const SERIF = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif';
 
 /** 縁取りした文字 */
@@ -57,48 +62,54 @@ export function toScreen(v: View, n: { x: number; y: number }): { x: number; y: 
   return { x: v.padX + (n.x / 100) * (v.w - 2 * v.padX), y: v.padY + (n.y / 100) * (v.h - 2 * v.padY) };
 }
 
-/** 拠点の丸の半径。低い地図では小さくする(setScale で決める) */
-let NODE_R = 22;
+/** 拠点の絵の大きさ(1 で幅48)。低い地図では小さくする(setScale で決める) */
+let K = 1.1;
+/** 拠点の占める半径の目安(線の札・移動中の印をよける距離に使う) */
+let NODE_R = 24;
 function setScale(v: View): void {
-  NODE_R = v.h < 300 ? 17 : 22;
-}
-/**
- * 待機中の印を拠点のまわりに置く角度(度。0=右、90=下)。拠点名は真上にあるので上側を避ける。
- * 真横(0・180度)は拠点の中の「米○○」の文字にかかるので、内側の輪では使わない。
- * 5つを超えたら、外側の輪に半分ずらした角度で並べる
- */
-const IDLE_ANGLES = [30, 90, 150, 210, 330];
-const IDLE_RING_GAP = 22;
-
-/** 拠点で待機している隊の印の、拠点の中心からの位置(k 番目) */
-function idleOffset(k: number): { x: number; y: number } {
-  const ring = Math.floor(k / IDLE_ANGLES.length);
-  const deg = IDLE_ANGLES[k % IDLE_ANGLES.length]! + ring * 30;
-  const r = NODE_R + 12 + ring * IDLE_RING_GAP;
-  return { x: Math.cos((deg * Math.PI) / 180) * r, y: Math.sin((deg * Math.PI) / 180) * r };
+  // 地図の大きさに合わせる(低い・狭い地図では小さく、PC の広い地図では大きく)
+  K = Math.max(0.85, Math.min(1.8, v.h / 420, v.w / 600));
+  NODE_R = 24 * K;
 }
 
-/** 画面座標にある拠点のID。無ければ null。 */
+/** 拠点の絵のまわりの位置(中心 p からの距離) */
+function geo(p: { x: number; y: number }) {
+  const top = p.y - 24 * K;
+  const ground = p.y + 12 * K;
+  const plateY = ground + 9;
+  return {
+    top,
+    ground,
+    /** 名前 */
+    nameY: top - 9,
+    /** 米の量の札 */
+    plateY,
+    /** 札の下の1行(あと何日・撤退用) */
+    belowY: plateY + 17,
+    /** 待機中の隊(足元の位置) */
+    idle: { x: p.x + 26 * K + 9 * K, y: ground + 2 },
+    halfW: 25 * K,
+  };
+}
+
+/** 画面座標にある拠点のID(絵・名前・米の札の範囲)。無ければ null。 */
 export function hitNode(state: SimState, v: View, x: number, y: number): string | null {
   setScale(v);
   for (const n of state.scenario.map.nodes) {
     const p = toScreen(v, n);
-    if (Math.hypot(p.x - x, p.y - y) <= NODE_R + 10) return n.id;
+    const g = geo(p);
+    if (Math.abs(x - p.x) <= g.halfW + 4 && y >= g.top - 8 && y <= g.plateY + 10) return n.id;
   }
   return null;
 }
 
-/** 画面座標にある、拠点で待機中の運搬隊の印のID。無ければ null */
-export function hitConvoy(state: SimState, v: View, x: number, y: number): string | null {
+/** 画面座標にある「拠点で待機中の隊」の絵の、拠点のID。無ければ null */
+export function hitIdleGroup(state: SimState, v: View, x: number, y: number): string | null {
   setScale(v);
-  const count = new Map<string, number>();
-  for (const c of state.convoys) {
-    if (c.dropped || c.move) continue;
-    const k = count.get(c.at) ?? 0;
-    count.set(c.at, k + 1);
-    const base = toScreen(v, state.scenario.map.nodes.find((n) => n.id === c.at)!);
-    const o = idleOffset(k);
-    if (Math.hypot(base.x + o.x - x, base.y + o.y - y) <= 14) return c.id;
+  for (const n of state.scenario.map.nodes) {
+    if (!state.convoys.some((c) => !c.dropped && !c.move && c.at === n.id)) continue;
+    const g = geo(toScreen(v, n));
+    if (Math.abs(x - g.idle.x - 4) <= 18 * K && y >= g.idle.y - 34 * K - 12 && y <= g.idle.y + 6) return n.id;
   }
   return null;
 }
@@ -110,7 +121,7 @@ export function daysLeftColor(d: number): string {
 }
 
 /** 移動中の印が拠点の丸や文字に重ならないよう、近すぎる場合は丸の外へ押し出す */
-function avoidNodes(state: SimState, v: View, p: { x: number; y: number }, min = NODE_R + 14): { x: number; y: number } {
+function avoidNodes(state: SimState, v: View, p: { x: number; y: number }, min = NODE_R + 16): { x: number; y: number } {
   for (const n of state.scenario.map.nodes) {
     const c = toScreen(v, n);
     const dx = p.x - c.x;
@@ -223,45 +234,47 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.restore();
   }
 
-  // 拠点(数字は1つだけ。物資・市の詳しい量は拠点を押すと出る)
-  const small = v.h < 300;
+  // 拠点(絵と、米の量の札が1つ。物資・市の詳しい量は拠点を押すと出る)
   for (const n of sc.map.nodes) {
     const p = toScreen(v, n);
-    if (hl.pickFrom && n.id !== hl.pickFrom) {
-      // 行き先に選べる拠点: 朱の点線の輪
+    const g = geo(p);
+    const ring = (dash: boolean) => {
       ctx.strokeStyle = C.bad;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = dash ? 2 : 3;
+      ctx.setLineDash(dash ? [4, 4] : []);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, NODE_R + 6, 0, Math.PI * 2);
+      ctx.ellipse(p.x, (g.top + g.plateY) / 2, g.halfW + 8, (g.plateY - g.top) / 2 + 8, 0, 0, Math.PI * 2);
       ctx.stroke();
       ctx.setLineDash([]);
-    }
-    if (n.id === hl.selectedNodeId) {
-      ctx.strokeStyle = C.bad;
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, NODE_R + 6, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    drawNodeShape(ctx, n, p);
+    };
+    // 行き先に選べる拠点は朱の点線、詳しく見ている拠点は朱の線で囲む
+    if (hl.pickFrom && n.id !== hl.pickFrom) ring(true);
+    if (n.id === hl.selectedNodeId) ring(false);
+    drawNodeIcon(ctx, iconOf(state, n), p.x, p.y, K, !!state.markets[n.id]);
     const name = state.markets[n.id] ? `${n.name}・市` : n.name;
-    inkText(ctx, name, p.x, p.y - NODE_R - (n.kind === 'depot' ? 17 : 11), C.ink, `bold ${small ? 14 : 15}px ${SERIF}`, 4);
+    inkText(ctx, name, p.x, g.nameY, C.ink, `bold ${K < 1 ? 14 : 15}px ${SERIF}`, 4);
+    // 米の量の札(100以上は小数を出さない)
     const rice = state.rice[n.id] ?? 0;
-    // 丸(四角)の中に収まるよう、100以上は小数を出さない。小さい丸では「米」を省く
-    ctx.font = `bold ${small ? 12 : 13}px ${SERIF}`;
+    const label = `米${rice >= 100 ? Math.round(rice) : fmt(rice)}`;
+    ctx.font = `bold 13px ${SERIF}`;
+    const pw = ctx.measureText(label).width + 10;
+    ctx.fillStyle = C.node;
+    ctx.strokeStyle = C.ink;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.rect(p.x - pw / 2, g.plateY - 8, pw, 16);
+    ctx.fill();
+    ctx.stroke();
     ctx.fillStyle = C.ink;
-    const num = rice >= 100 ? String(Math.round(rice)) : fmt(rice);
-    ctx.fillText(small ? num : `米${num}`, p.x, p.y + 0.5);
-    // 丸の下は1行だけ: 陣なら「あと何日」、撤退前なら撤退路の置き米
-    const below = p.y + NODE_R + 11;
+    ctx.fillText(label, p.x, g.plateY + 0.5);
+    // 札の下は1行だけ: 陣なら「あと何日」、撤退前なら撤退路の置き米
     const left = frontDaysLeft(state, n.id).days;
     const stop = hl.stops.find((x) => x.id === n.id && x.required > 0);
     if (left !== null) {
-      inkText(ctx, `あと${left.toFixed(1)}日`, p.x, below, daysLeftColor(left), `bold 14px ${SERIF}`, 4);
+      inkText(ctx, `あと${left.toFixed(1)}日`, p.x, g.belowY, daysLeftColor(left), `bold 14px ${SERIF}`, 4);
     } else if (stop) {
       const ok = stop.have + 1e-9 >= stop.required;
-      inkText(ctx, `撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, below, ok ? C.ok : C.bad, `bold 13px ${SERIF}`, 4);
+      inkText(ctx, `撤退用 ${fmt(stop.have)}/${fmt(stop.required)}`, p.x, g.belowY, ok ? C.ok : C.bad, `bold 13px ${SERIF}`, 4);
     }
   }
 
@@ -288,20 +301,19 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
   }
 
   // 運搬隊
-  // 待機中の隊は拠点のまわりに1つずつ並べる。移動中の隊は、同じ場所を一緒に進むものを1つの印にまとめる
-  // (狭い画面で7隊が重なると、どう並べても拠点の文字や軍勢の札に重なるため)
-  const idleCount = new Map<string, number>();
+  // 拠点で待機中の隊は、拠点ごとに1つの絵(人足を最大3人並べ、隊の数を添える)。
+  // 移動中の隊は、同じ場所を一緒に進むものを1つの絵にまとめる
+  for (const n of sc.map.nodes) {
+    const cs = state.convoys.filter((c) => !c.dropped && !c.move && c.at === n.id);
+    if (!cs.length) continue;
+    const g = geo(toScreen(v, n));
+    const sel = cs.some((c) => c.id === hl.selectedConvoyId);
+    const label = cs.length === 1 ? String(state.convoys.indexOf(cs[0]!) + 1) : `${cs.length}隊`;
+    drawConvoyGroup(ctx, g.idle, cs.map((c) => c.horses > 0), 1, label, sel, null);
+  }
   const groups = new Map<string, { p: { x: number; y: number }; idx: number[] }>();
   state.convoys.forEach((c, i) => {
-    if (c.dropped) return;
-    if (!c.move) {
-      const k = idleCount.get(c.at) ?? 0;
-      idleCount.set(c.at, k + 1);
-      const base = toScreen(v, convoyPosition(state, c, alpha));
-      const off = idleOffset(k);
-      drawConvoyMark(ctx, { x: base.x + off.x, y: base.y + off.y }, String(i + 1), false, c.id === hl.selectedConvoyId, null);
-      return;
-    }
+    if (c.dropped || !c.move) return;
     const p = avoidNodes(state, v, toScreen(v, convoyPosition(state, c, alpha)));
     const key = `${Math.round(p.x / 10)},${Math.round(p.y / 10)}`;
     const g = groups.get(key) ?? { p, idx: [] };
@@ -310,7 +322,7 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
   });
   for (const g of groups.values()) {
     const cs = g.idx.map((i) => state.convoys[i]!);
-    // 積荷の数字は、拠点の近く(中心から60px以内)では出さない(拠点の「あと○日」などの文字に重なるため。数字は右のパネルで見られる)
+    // 積荷の数字は、拠点の近く(中心から60px以内)では出さない(拠点の文字に重なるため。数字は札で見られる)
     const nearNode = sc.map.nodes.some((n) => {
       const q = toScreen(v, n);
       return Math.hypot(q.x - g.p.x, q.y - g.p.y) < 60;
@@ -318,103 +330,62 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     const cargo = cs.reduce((t, c) => t + c.cargo, 0);
     const label = cs.length === 1 ? String(g.idx[0]! + 1) : `${cs.length}隊`;
     const sel = cs.some((c) => c.id === hl.selectedConvoyId);
-    drawConvoyMark(ctx, g.p, label, true, sel, nearNode ? null : `米${fmt(cargo)}`);
+    // 向き: 行き先が右なら右向き
+    const to = byId.get(cs[0]!.move!.route[cs[0]!.move!.route.length - 1]!)!;
+    const face = toScreen(v, to).x >= g.p.x ? 1 : -1;
+    // 絵の足元は道の線より少し下(道の線が胴のあたりを通るように)
+    drawConvoyGroup(ctx, { x: g.p.x, y: g.p.y + 10 }, cs.map((c) => c.horses > 0), face, label, sel, nearNode ? null : `米${fmt(cargo)}`);
   }
 }
 
-/** 運搬隊の印。label は隊番号か「6隊」。動いている隊は墨、待機中は紙色。cargoText があれば右に書く */
-function drawConvoyMark(
+/**
+ * 運搬隊の絵。horses は隊ごとに馬の隊かどうか。人足(または馬)を最大3つ少しずつずらして並べ、
+ * 右上に隊番号か「5隊」の札を付ける。選んだ隊を含むなら、足元を朱の輪で囲む
+ */
+function drawConvoyGroup(
   ctx: CanvasRenderingContext2D,
-  p: { x: number; y: number },
+  feet: { x: number; y: number },
+  horses: boolean[],
+  face: 1 | -1,
   label: string,
-  moving: boolean,
   selected: boolean,
   cargoText: string | null,
 ): void {
-  ctx.font = 'bold 12px sans-serif';
-  const w = Math.max(20, ctx.measureText(label).width + 10);
-  const shape = () => {
-    ctx.beginPath();
-    if (w <= 20) ctx.arc(p.x, p.y, 10, 0, Math.PI * 2);
-    else ctx.roundRect(p.x - w / 2, p.y - 10, w, 20, 10);
-  };
+  const k = K * 0.85;
+  const n = Math.min(3, horses.length);
   if (selected) {
-    // 選んだ隊は朱の輪で囲む
     ctx.strokeStyle = C.bad;
-    ctx.lineWidth = 6;
-    shape();
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(feet.x + (n - 1) * 3, feet.y, 13 + (n - 1) * 4, 5, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
-  ctx.fillStyle = moving ? C.ink : C.node;
-  ctx.strokeStyle = moving ? C.halo : C.ink;
-  ctx.lineWidth = moving ? 2 : 1.5;
-  shape();
+  // 奥(右上)から手前(左下)へ描く
+  for (let i = n - 1; i >= 0; i--) {
+    const x = feet.x + i * 7 * face;
+    const y = feet.y - i * 2;
+    if (horses[i]) drawPackHorse(ctx, x, y, k * 0.95, face);
+    else drawPorter(ctx, x, y, k, face);
+  }
+  // 隊番号の札(頭の上)
+  ctx.font = 'bold 12px sans-serif';
+  const bw = Math.max(17, ctx.measureText(label).width + 8);
+  const bx = feet.x + (n - 1) * 3.5 * face;
+  const by = feet.y - (n - 1) * 2 - 28 * k - 10;
+  ctx.fillStyle = selected ? C.bad : C.node;
+  ctx.strokeStyle = selected ? C.bad : C.ink;
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.roundRect(bx - bw / 2, by - 8.5, bw, 17, 8.5);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = moving ? '#fbf3e4' : C.ink;
-  ctx.fillText(label, p.x, p.y + 0.5);
+  ctx.fillStyle = selected ? '#fff' : C.ink;
+  ctx.fillText(label, bx, by + 0.5);
   if (cargoText) {
-    ctx.textAlign = 'left';
-    inkText(ctx, cargoText, p.x + w / 2 + 4, p.y, C.ink, `bold 12px ${SERIF}`, 3.5);
+    ctx.textAlign = face === 1 ? 'left' : 'right';
+    inkText(ctx, cargoText, bx + (bw / 2 + 4) * face, by, C.ink, `bold 12px ${SERIF}`, 3.5);
     ctx.textAlign = 'center';
   }
-}
-
-/** 拠点の形。蔵は屋根付きの四角、陣は陣幕の輪、ほかは丸。中に種類の字を薄く書く */
-function drawNodeShape(ctx: CanvasRenderingContext2D, n: MapNode, p: { x: number; y: number }): void {
-  const R = NODE_R;
-  ctx.fillStyle = C.node;
-  ctx.strokeStyle = C.ink;
-  if (n.kind === 'depot') {
-    // 屋根
-    ctx.fillStyle = C.ink;
-    ctx.beginPath();
-    ctx.moveTo(p.x - R - 6, p.y - R + 1);
-    ctx.lineTo(p.x + R + 6, p.y - R + 1);
-    ctx.lineTo(p.x + R - 3, p.y - R - 8);
-    ctx.lineTo(p.x - R + 3, p.y - R - 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = C.node;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.rect(p.x - R, p.y - R + 1, R * 2, R * 2 - 1);
-    ctx.fill();
-    ctx.stroke();
-  } else if (n.kind === 'front') {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
-    ctx.fill();
-    // 陣幕: 墨と白の段だら
-    ctx.lineWidth = 5;
-    ctx.strokeStyle = C.ink;
-    ctx.stroke();
-    ctx.setLineDash([5, 5]);
-    ctx.strokeStyle = C.node;
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineWidth = 1.5;
-    ctx.strokeStyle = C.bad;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, R + 3.5, 0, Math.PI * 2);
-    ctx.stroke();
-  } else {
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, R, 0, Math.PI * 2);
-    ctx.fill();
-    // 筆で2度なぞったような輪
-    ctx.lineWidth = 1.8;
-    ctx.stroke();
-    ctx.globalAlpha = 0.45;
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.arc(p.x + 0.8, p.y + 0.6, R - 1.5, 0.3, Math.PI * 1.7);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-  }
-  ctx.font = `bold 26px ${SERIF}`;
-  ctx.fillStyle = n.kind === 'front' ? 'rgba(163,50,42,0.16)' : 'rgba(43,38,32,0.11)';
-  ctx.fillText(KIND_GLYPH[n.kind], p.x, p.y + 1);
 }
 
 /** 軍勢の旗の位置・幅・文字 */
@@ -426,9 +397,8 @@ function armyBanner(ctx: CanvasRenderingContext2D, state: SimState, v: View, alp
   const w = ctx.measureText(label).width + 14;
   // 札は横長なので、半分の幅ぶん余分に離す
   if (!a.move) {
-    // 拠点の左に置く。待機中の隊の印が周りにあるなら、印と重ならないよう拠点名の上に置く
-    const crowded = state.convoys.some((c) => !c.move && !c.dropped && c.at === a.at);
-    p = crowded ? { x: p.x, y: p.y - NODE_R - 34 } : { x: p.x - NODE_R - 4 - w / 2, y: p.y - 4 };
+    // 拠点の絵の左に置く(待機中の隊の絵は右に出る)
+    p = { x: p.x - 25 * K - 6 - w / 2, y: p.y - 4 };
   } else {
     // 移動中は、同じ道を進む運搬隊の印と重ならないよう、道の線より上にずらす
     p = avoidNodes(state, v, p, NODE_R + 6 + w / 2);
@@ -480,26 +450,23 @@ function labelSpot(a: { x: number; y: number }, b: { x: number; y: number }, w: 
   return best;
 }
 
-/** 拠点のまわりで、日数の札を置きたくない範囲(丸・名前・下の文字・待機中の隊の印) */
+/** 拠点のまわりで、日数の札を置きたくない範囲(絵・名前・米の札・下の文字・待機中の隊の絵) */
 function nodeObstacles(ctx: CanvasRenderingContext2D, state: SimState, v: View, hl: Highlight): Rect[] {
   const out: Rect[] = [];
-  const idle = new Map<string, number>();
-  for (const c of state.convoys) if (!c.dropped && !c.move) idle.set(c.at, (idle.get(c.at) ?? 0) + 1);
   for (const n of state.scenario.map.nodes) {
     const p = toScreen(v, n);
-    const R = NODE_R + 3;
-    out.push({ x: p.x - R, y: p.y - R - (n.kind === 'depot' ? 9 : 0), w: R * 2, h: R * 2 + (n.kind === 'depot' ? 9 : 0) });
+    const g = geo(p);
+    // 市の幟は絵の左に出るので、その分も含める
+    const mk = state.markets[n.id] ? 9 * K : 0;
+    out.push({ x: p.x - g.halfW - mk, y: g.top, w: g.halfW * 2 + mk, h: g.plateY + 8 - g.top });
     ctx.font = `bold 15px ${SERIF}`;
     const nw = ctx.measureText(state.markets[n.id] ? `${n.name}・市` : n.name).width + 6;
-    const ny = p.y - NODE_R - (n.kind === 'depot' ? 17 : 11);
-    out.push({ x: p.x - nw / 2, y: ny - 9, w: nw, h: 18 });
-    // 丸の下の1行(あと何日・撤退用)
+    out.push({ x: p.x - nw / 2, y: g.nameY - 9, w: nw, h: 18 });
     if (frontDaysLeft(state, n.id).days !== null || hl.stops.some((x) => x.id === n.id && x.required > 0)) {
-      out.push({ x: p.x - 45, y: p.y + NODE_R + 3, w: 90, h: 16 });
+      out.push({ x: p.x - 45, y: g.belowY - 8, w: 90, h: 16 });
     }
-    for (let k = 0; k < (idle.get(n.id) ?? 0); k++) {
-      const o = idleOffset(k);
-      out.push({ x: p.x + o.x - 11, y: p.y + o.y - 11, w: 22, h: 22 });
+    if (state.convoys.some((c) => !c.dropped && !c.move && c.at === n.id)) {
+      out.push({ x: g.idle.x - 10 * K, y: g.idle.y - 34 * K - 12, w: 36 * K, h: 34 * K + 14 });
     }
   }
   return out;

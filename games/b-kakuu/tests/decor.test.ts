@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Scenario } from '@hyoro/core';
 import { DECORS, DECOR_MAX, DECOR_MIN, decorFor, type Pt } from '../src/decor';
+import { NODE_ICONS } from '../src/icons';
 
 const files = import.meta.glob('../data/scenario-*.json', { eager: true, import: 'default' });
 const SCENARIOS = Object.values(files) as unknown as Scenario[];
@@ -33,6 +34,11 @@ describe('地図の飾り', () => {
       const byId = new Map(nodes.map((n) => [n.id, n]));
       const links = s.map.links.map((l) => ({ l, a: byId.get(l.a)!, b: byId.get(l.b)! }));
       const mid = (x: (typeof links)[number]) => ({ x: (x.a.x + x.b.x) / 2, y: (x.a.y + x.b.y) / 2 });
+
+      it('どの拠点にも絵の種類が決まっていて、知らない絵・知らない拠点はない', () => {
+        for (const n of nodes) expect(NODE_ICONS, n.id).toContain(d.icons[n.id]);
+        for (const id of Object.keys(d.icons)) expect(byId.has(id), id).toBe(true);
+      });
 
       it('座標は描ける範囲にある', () => {
         const all: number[][] = [...d.mountains, ...d.forests, ...d.fields, ...d.marsh, ...(d.sea ?? []), ...d.rivers.flatMap((r) => r.points)];

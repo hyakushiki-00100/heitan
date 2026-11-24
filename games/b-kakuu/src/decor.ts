@@ -3,6 +3,7 @@
  * 座標は地図と同じ 0〜100。余白にも描くため -25〜120 まで認める
  */
 import raw from '../data/decor.json';
+import type { NodeIcon } from './icons';
 
 export type Pt = [number, number];
 export type Corner = 'tl' | 'tr' | 'bl' | 'br';
@@ -13,6 +14,8 @@ export interface MapDecor {
   title: string;
   titleCorner: Corner;
   compassCorner: Corner;
+  /** 拠点の絵の種類(拠点ID → 絵) */
+  icons: Record<string, NodeIcon>;
   /** 海(多角形) */
   sea?: Pt[];
   /** 山 [x, 麓のy, 大きさ] */
