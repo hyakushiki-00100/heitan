@@ -8,8 +8,16 @@ import { runBot } from './runner';
 import { ALL_SCENARIOS, BOT_SEEDS } from './scenarios';
 
 describe('自動プレイボット', () => {
-  it('シナリオが見つかる(B 架空戦国の 01・02・03)', () => {
-    expect(ALL_SCENARIOS.map((x) => `${x.game}/${x.scenario.id}`)).toEqual(['b-kakuu/b-01', 'b-kakuu/b-02', 'b-kakuu/b-03']);
+  it('シナリオが見つかる(B 架空戦国の 01・02・03 と練習1〜4)', () => {
+    expect(ALL_SCENARIOS.map((x) => `${x.game}/${x.scenario.id}`)).toEqual([
+      'b-kakuu/b-01',
+      'b-kakuu/b-02',
+      'b-kakuu/b-03',
+      'b-kakuu/t-1',
+      'b-kakuu/t-2',
+      'b-kakuu/t-3',
+      'b-kakuu/t-4',
+    ]);
   });
   for (const { game, scenario } of ALL_SCENARIOS) {
     for (const bot of ALL_BOTS) {

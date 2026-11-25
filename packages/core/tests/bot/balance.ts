@@ -71,8 +71,11 @@ export function judge(rows: RunRow[]): ScenarioReport[] {
     const nv = bots.find((b) => b.bot === 'naive');
     const rules = bots.filter((b) => b.bot.startsWith('rules:'));
     const best = rules.reduce<BotSummary | null>((a, b) => (!a || b.meanStars > a.meanStars ? b : a), null);
-    if (nv && nv.medianStars >= 2) flags.push(`naive でも★${nv.medianStars}(中央値)が取れる`);
-    if (best && best.medianStars < 1) flags.push(`ルールカードの最良(${best.bot})でも★の中央値が${best.medianStars}`);
+    // 練習の遠征(ID が t- で始まる)は、わざとやさしく作り、カードの無いものもある。
+    // 「やさしすぎる」「カードで勝てない」は調べない(手順どおりに遊べば勝てることは各作品の tutorial.test.ts で確かめる)
+    const practice = scenario.startsWith('t-');
+    if (!practice && nv && nv.medianStars >= 2) flags.push(`naive でも★${nv.medianStars}(中央値)が取れる`);
+    if (!practice && best && best.medianStars < 1) flags.push(`ルールカードの最良(${best.bot})でも★の中央値が${best.medianStars}`);
     for (const b of [nv, best]) {
       if (b && b.maxStars - b.minStars >= 2) flags.push(`${b.bot} の★がシードで ${b.minStars}〜${b.maxStars} とぶれる`);
     }

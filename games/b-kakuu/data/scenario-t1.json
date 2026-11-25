@@ -1,0 +1,31 @@
+{
+  "id": "t-1",
+  "title": "練習1 ― 運ぶ人も食べる",
+  "stepDays": 0.5,
+  "carrierCapacity": 10,
+  "carrierRation": 0.5,
+  "goalDays": 6,
+  "seed": 1,
+  "depotId": "kura",
+  "frontId": "jin",
+  "map": {
+    "nodes": [
+      { "id": "kura", "name": "蔵",       "kind": "depot",   "x": 12, "y": 62 },
+      { "id": "juku", "name": "宿場",     "kind": "village", "x": 50, "y": 42 },
+      { "id": "jin",  "name": "前線の陣", "kind": "front",   "x": 88, "y": 60 }
+    ],
+    "links": [
+      { "a": "kura", "b": "juku", "days": 1.5 },
+      { "a": "juku", "b": "jin",  "days": 1.5 }
+    ]
+  },
+  "nodes": {
+    "kura": { "rice": 100 },
+    "jin":  { "rice": 20 }
+  },
+  "army": { "troops": 10, "ration": 0.5, "capacityPer": 4 },
+  "scoring": { "perPerson": 10, "perSurplus": 1 },
+  "convoys": [
+    { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" }
+  ]
+}

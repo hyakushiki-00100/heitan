@@ -29,6 +29,11 @@ import {
   type SimState,
 } from '@hyoro/core';
 import { loadJson, saveJson } from '@hyoro/platform';
+import practice1 from '../data/scenario-t1.json';
+import practice2 from '../data/scenario-t2.json';
+import practice3 from '../data/scenario-t3.json';
+import practice4 from '../data/scenario-t4.json';
+import tutorialData from '../data/tutorial.json';
 import scenario01 from '../data/scenario-01.json';
 import scenario02 from '../data/scenario-02.json';
 import scenario03 from '../data/scenario-03.json';
@@ -36,7 +41,17 @@ import { setupGlossary, t } from './glossary';
 import { daysLeftColor, draw, fmt, hitIdleGroup, hitNode, type View } from './render';
 import { paperTileUrl } from './washi';
 
-const SCENARIOS = [scenario01, scenario02, scenario03] as unknown as Scenario[];
+/** 練習の遠征4本のあとに本番3本。URL で指定がなければ練習1から */
+const SCENARIOS = [practice1, practice2, practice3, practice4, scenario01, scenario02, scenario03] as unknown as Scenario[];
+
+/** 練習の遠征の説明と、隠す札(retreat=撤退、cards=カード、auto=隊を自動にするボタン) */
+interface Tutorial {
+  intro: string[];
+  hide: ('retreat' | 'cards' | 'auto')[];
+}
+const TUTORIALS = tutorialData as unknown as Record<string, Tutorial>;
+const tutorial = (): Tutorial | null => TUTORIALS[state.scenario.id] ?? null;
+const hidden = (what: 'retreat' | 'cards' | 'auto'): boolean => !!tutorial()?.hide.includes(what);
 
 /** URL の ?s= で選んだシナリオ。なければ1本目 */
 function pickScenario(): Scenario {
@@ -113,7 +128,31 @@ function reset(): void {
   bestLine = null;
   $('result-share').dataset.code = '';
   $('result').hidden = true;
+  // 練習の遠征では、始めに説明を出す
+  const tu = tutorial();
+  $('intro').hidden = !tu;
+  if (tu) {
+    $('intro-title').textContent = state.scenario.title;
+    $('intro-list').innerHTML = tu.intro.map((x) => `<li>${x}</li>`).join('');
+  }
   renderPanel();
+}
+
+/** 次のシナリオ(最後なら null) */
+function nextScenario(): Scenario | null {
+  const i = SCENARIOS.findIndex((x) => x.id === state.scenario.id);
+  return SCENARIOS[i + 1] ?? null;
+}
+
+/** シナリオを選び直す(URL の seed は外す) */
+function switchScenario(id: string): void {
+  scenario = SCENARIOS.find((x) => x.id === id) ?? SCENARIOS[0]!;
+  const url = new URL(location.href);
+  url.searchParams.set('s', scenario.id);
+  url.searchParams.delete('seed');
+  history.replaceState(null, '', url);
+  $<HTMLSelectElement>('scenario').value = scenario.id;
+  reset();
 }
 
 function view(): View {
@@ -505,6 +544,8 @@ function renderHint(): void {
     hint = `${t('撤退')}中です。蔵の外に残った隊は帰還に数えません。${t('帰り分')}を持たせて蔵へ戻してください。`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
     hint = `${fmt(goal)}日目に${t('撤退')}が始まります。「撤退」の札で、撤退路に置く米を確かめてください。`;
+  } else if (a.phase === 'hold' && state.convoys.some((x) => !x.move && !x.dropped && !x.auto && x.at === state.scenario.frontId)) {
+    hint = `陣に着いた隊は、陣の横の足軽を押し、行き先に蔵を押して「帰り分だけ」で戻してください(${t('帰り分')})。`;
   } else if (!running && state.convoys.some((x) => x.move)) {
     hint = '▶ で時を進めます。';
   } else {
@@ -527,7 +568,11 @@ function renderPanel(): void {
   $('sheet').hidden = pane === null;
   $('sheet-title').textContent = pane ? PANE_TITLE[pane] : '';
   document.querySelectorAll<HTMLElement>('[data-pane]').forEach((el) => (el.hidden = el.dataset.pane !== pane));
-  document.querySelectorAll<HTMLButtonElement>('.tab').forEach((b) => b.classList.toggle('on', b.dataset.tab === pane));
+  document.querySelectorAll<HTMLButtonElement>('.tab').forEach((b) => {
+    b.classList.toggle('on', b.dataset.tab === pane);
+    // 練習で使わない札は出さない
+    b.hidden = (b.dataset.tab === 'retreat' && hidden('retreat')) || (b.dataset.tab === 'cards' && hidden('cards'));
+  });
   // 撤退前に置き米が足りない拠点があれば、「撤退」の札を目立たせる
   const short = state.army.phase === 'hold' && currentDay(state) >= state.scenario.goalDays - 6 && retreatPlan(state).stops.some((x) => x.required > 0 && x.have + EPS < x.required);
   document.querySelector('[data-tab="retreat"]')!.classList.toggle('alert', short);
@@ -657,7 +702,8 @@ function renderOrder(): void {
     body.innerHTML = '';
     return;
   }
-  const autoBtn = `<div class="row"><button type="button" id="btn-auto">${c.auto ? 'この隊を手動に戻す' : 'この隊を自動にする'}</button></div>`;
+  // 練習で自動を使わないときは出さない(要素が残るよう、隠すだけにする)
+  const autoBtn = `<div class="row"${hidden('auto') ? ' hidden' : ''}><button type="button" id="btn-auto">${c.auto ? 'この隊を手動に戻す' : 'この隊を自動にする'}</button></div>`;
   const bindAuto = () => {
     $('btn-auto').onclick = () => {
       setAuto(state, c.id, !c.auto);
@@ -890,6 +936,14 @@ function showResult(): void {
   const next = r.toNextStar === null ? (r.stars === 3 ? '最高の評価です' : '') : `★${r.stars + 1}まで あと${fmt(Math.ceil(r.toNextStar * 10) / 10)}点`;
   $('result-stars').innerHTML = `${starLine}<small>${next}</small>`;
   renderShare(r);
+  // 次の遠征へ(最後のシナリオでは出さない)
+  const nx = nextScenario();
+  const nb = $<HTMLButtonElement>('btn-next');
+  nb.hidden = !nx;
+  if (nx) {
+    nb.textContent = `次へ: ${nx.title}`;
+    nb.onclick = () => switchScenario(nx.id);
+  }
   $('result').hidden = false;
 }
 
@@ -980,6 +1034,9 @@ $('btn-speed').onclick = () => {
   renderPanel();
 };
 $('btn-retry').onclick = reset;
+$('btn-intro-start').onclick = () => {
+  $('intro').hidden = true;
+};
 /** 拠点で待機中の手動の隊 */
 function idleManual(id: string) {
   return state.convoys.filter((x) => !x.move && !x.dropped && !x.auto && x.at === id);
@@ -1041,15 +1098,7 @@ $('ver').textContent = `試作 ${__APP_VERSION__}`;
   const sel = $<HTMLSelectElement>('scenario');
   sel.innerHTML = SCENARIOS.map((x) => `<option value="${x.id}">${x.title}</option>`).join('');
   sel.value = scenario.id;
-  sel.onchange = () => {
-    scenario = SCENARIOS.find((x) => x.id === sel.value) ?? SCENARIOS[0]!;
-    // シナリオを変えたら、シードは選び直す(URL の seed は外す)
-    const url = new URL(location.href);
-    url.searchParams.set('s', scenario.id);
-    url.searchParams.delete('seed');
-    history.replaceState(null, '', url);
-    reset();
-  };
+  sel.onchange = () => switchScenario(sel.value);
 }
 reset();
 resize();

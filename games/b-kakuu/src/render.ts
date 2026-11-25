@@ -187,6 +187,23 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
       ctx.setLineDash([]);
     }
   }
+  // 撤退路(保持中は薄く示す。日数の札の下に敷く)
+  if (hl.retreatNodes) {
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = C.bad;
+    ctx.lineWidth = 12;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    hl.retreatNodes.forEach((id, i) => {
+      const p = toScreen(v, byId.get(id)!);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // 日数の札は、拠点の丸・名前・下の文字・待機中の隊の印に重ならない位置を、道に沿って探して置く
   const obstacles = nodeObstacles(ctx, state, v, hl);
   if (state.army.phase !== 'gone') {
@@ -215,23 +232,6 @@ export function draw(ctx: CanvasRenderingContext2D, state: SimState, v: View, al
     ctx.stroke();
     ctx.fillStyle = hot ? C.ink : l.risk || l.raid ? C.warn : C.ink2;
     ctx.fillText(label, mx, my + 0.5);
-  }
-
-  // 撤退路(保持中は薄く示す)
-  if (hl.retreatNodes) {
-    ctx.save();
-    ctx.globalAlpha = 0.28;
-    ctx.strokeStyle = C.bad;
-    ctx.lineWidth = 12;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    hl.retreatNodes.forEach((id, i) => {
-      const p = toScreen(v, byId.get(id)!);
-      if (i === 0) ctx.moveTo(p.x, p.y);
-      else ctx.lineTo(p.x, p.y);
-    });
-    ctx.stroke();
-    ctx.restore();
   }
 
   // 拠点(絵と、米の量の札が1つ。物資・市の詳しい量は拠点を押すと出る)

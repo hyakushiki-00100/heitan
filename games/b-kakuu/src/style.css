@@ -13,6 +13,8 @@
   --paper-tile: none;
 }
 * { box-sizing: border-box; }
+/* hidden 属性の要素は、display を指定したクラスが付いていても必ず隠す */
+[hidden] { display: none !important; }
 /* 画面いっぱいに地図を出し、ページ全体はスクロールさせない(スマホでスクロールしないと操作できない状態をなくす) */
 html, body { margin: 0; height: 100%; overflow: hidden; }
 body {
@@ -140,7 +142,25 @@ summary { cursor: pointer; color: var(--ink-2); min-height: 32px; line-height: 3
   z-index: 5;
   position: fixed; inset: 0; background: rgba(43,38,32,.45); display: flex; align-items: center; justify-content: center; padding: 12px;
 }
-#result[hidden] { display: none; }
+#result[hidden], #intro[hidden] { display: none; }
+#intro {
+  z-index: 5; position: fixed; inset: 0; background: rgba(43,38,32,.45); display: flex; align-items: center; justify-content: center; padding: 12px;
+}
+.intro-box {
+  background: var(--card) var(--paper-tile); border: 3px double var(--ink); padding: 14px 20px; max-width: 460px; width: 100%;
+  max-height: calc(100dvh - 24px); overflow-y: auto; box-shadow: 4px 4px 0 rgba(43,38,32,.25);
+}
+.intro-title { font-size: 18px; font-weight: bold; margin: 0 0 6px; border-bottom: 1px solid var(--ink-2); }
+#intro-list { margin: 0 0 8px; padding-left: 1.3em; font-size: 15px; line-height: 1.6; }
+#intro-list li { margin: 4px 0; }
+.intro-box .big-go { position: static; box-shadow: none; }
+.result-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+@media (orientation: landscape) and (max-height: 500px) {
+  .intro-box { padding: 8px 14px; max-width: 640px; }
+  .intro-title { font-size: 16px; }
+  #intro-list { font-size: 13px; line-height: 1.45; }
+  .intro-box .big-go { min-height: 40px; }
+}
 .result-box {
   background: var(--card) var(--paper-tile); border: 3px double var(--ink); padding: 16px 20px; max-width: 380px; text-align: center;
   max-height: calc(100dvh - 24px); overflow-y: auto; box-shadow: 4px 4px 0 rgba(43,38,32,.25);
@@ -161,7 +181,8 @@ summary { cursor: pointer; color: var(--ink-2); min-height: 32px; line-height: 3
   .result-box #result-stars { grid-column: 1; grid-row: 1; }
   .result-box #result-text { grid-column: 1; grid-row: 2 / 4; margin: 2px 0 0; font-size: 13px; line-height: 1.35; }
   /* 右の列は「もう一度」を上に、共有をその下に(行をまたぐ要素どうしが重ならないように) */
-  .result-box #btn-retry { grid-column: 2; grid-row: 1; margin-top: 4px; }
+  .result-box .result-actions { grid-column: 2; grid-row: 1; margin-top: 4px; }
+  .result-actions button { flex: 1; }
   .result-box #result-share { grid-column: 2; grid-row: 2 / 4; }
   .stars { font-size: 20px; }
 }

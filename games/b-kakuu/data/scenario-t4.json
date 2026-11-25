@@ -1,0 +1,37 @@
+{
+  "id": "t-4",
+  "title": "練習4 ― ルールカードで自動に",
+  "stepDays": 0.5,
+  "carrierCapacity": 10,
+  "carrierRation": 0.5,
+  "goalDays": 16,
+  "seed": 1,
+  "depotId": "kura",
+  "frontId": "jin",
+  "map": {
+    "nodes": [
+      { "id": "kura", "name": "蔵",       "kind": "depot",   "x": 12, "y": 62 },
+      { "id": "juku", "name": "宿場",     "kind": "village", "x": 50, "y": 42 },
+      { "id": "jin",  "name": "前線の陣", "kind": "front",   "x": 88, "y": 60 }
+    ],
+    "links": [
+      { "a": "kura", "b": "juku", "days": 1.5 },
+      { "a": "juku", "b": "jin",  "days": 1.5 }
+    ]
+  },
+  "nodes": {
+    "kura": { "rice": 400 },
+    "jin":  { "rice": 40 }
+  },
+  "army": { "troops": 16, "ration": 0.5, "capacityPer": 4 },
+  "scoring": { "perPerson": 10, "perSurplus": 1 },
+  "cards": [
+    { "id": "kiro", "name": "帰路分を残す", "text": "自動の隊は、陣の2日分と撤退で持ち出す分を減らす持ち出しをしない。帰り分は荷を失っても尽きない量を積む。撤退する兵は、陣にいる運搬隊の帰り分を残す", "params": { "frontReserveDays": 2 } }
+  ],
+  "convoys": [
+    { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c3", "name": "三番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c4", "name": "四番荷駄", "carriers": 5, "at": "kura" }
+  ]
+}

@@ -18,13 +18,13 @@ const outDir = root + 'out/screenshots/';
 const PORT = 4179;
 const BASE = `http://localhost:${PORT}/`;
 
-/** 作品ごとのシナリオID(games/作品/data/ の scenario-○○.json から集める) */
-function scenarioIds(game: string): string[] {
+/** 作品ごとのシナリオのIDと、撤退が始まる日(games/作品/data/ の scenario-○○.json から集める) */
+function scenarioIds(game: string): { id: string; goalDays: number }[] {
   const dir = `${root}games/${game}/data/`;
   return readdirSync(dir)
     .filter((f) => /^scenario-.*\.json$/.test(f))
     .sort()
-    .map((f) => (JSON.parse(readFileSync(dir + f, 'utf8')) as { id: string }).id);
+    .map((f) => JSON.parse(readFileSync(dir + f, 'utf8')) as { id: string; goalDays: number });
 }
 
 const day = async (p: Page) => Number(((await p.textContent('#clock')) ?? '').match(/第\s*([\d.]+)\s*日/)?.[1] ?? 0);
@@ -81,7 +81,7 @@ async function main(): Promise<void> {
       }
     }
     const browser = await chromium.launch();
-    for (const id of scenarioIds('b-kakuu')) {
+    for (const { id, goalDays } of scenarioIds('b-kakuu')) {
       for (const [device, opts] of [
         ['pc', { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 }],
         ['phone', { ...devices['iPhone 13 landscape'], viewport: { width: 750, height: 230 } }],
@@ -97,25 +97,35 @@ async function main(): Promise<void> {
         });
         await p.goto(`${BASE}?s=${id}&seed=1`);
         const name = (n: string) => `${id}-${n}-${device}`;
+        // 練習の遠征は、始めに説明が出る
+        if (await p.isVisible('#intro')) {
+          await shoot(p, name('0-intro'), errors);
+          await p.click('#btn-intro-start');
+        }
         await shoot(p, name('1-plan'), errors);
         // 指図の札(いちばん使う画面): 1番の隊を選び、行き先に陣を選ぶ
         await p.click('[data-tab="convoys"]');
         await p.click('#convoys .convoy');
         await p.click('#order-body [data-dest="jin"]');
         await shoot(p, name('1b-order'), errors);
-        await p.click('#btn-sheet-close');
-        await p.click('[data-tab="cards"]');
-        await p.click('#btn-all-auto');
-        await p.click('[data-card="kiro"]');
-        await p.click('#btn-sheet-close');
+        // カードの無い練習では、この隊をそのまま出発させて進める
+        if (await p.isVisible('[data-tab="cards"]')) await p.click('#btn-sheet-close');
+        else await p.click('#btn-go');
+        // カードの札があるシナリオでは、全隊を自動にして「帰路分を残す」で進める(無い練習はそのまま進める)
+        if (await p.isVisible('[data-tab="cards"]')) {
+          await p.click('[data-tab="cards"]');
+          await p.click('#btn-all-auto');
+          await p.click('[data-card="kiro"]');
+          await p.click('#btn-sheet-close');
+        }
         await p.click('#btn-speed');
         await p.click('#btn-speed');
         await runUntil(p, async () => (await day(p)) >= 3);
         await shoot(p, name('2-moving'), errors);
         if (device !== 'portrait') {
-          await runUntil(p, async () => (await day(p)) >= 19.5);
+          await runUntil(p, async () => (await day(p)) >= goalDays - 0.5);
           await shoot(p, name('3-before-retreat'), errors);
-          await runUntil(p, async () => (await day(p)) >= 22);
+          await runUntil(p, async () => (await day(p)) >= goalDays + 2);
           await shoot(p, name('4-retreat'), errors);
         }
         await runUntil(p, async () => false);

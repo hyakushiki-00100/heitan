@@ -1,0 +1,32 @@
+{
+  "id": "t-3",
+  "title": "練習3 ― 撤退の備え",
+  "stepDays": 0.5,
+  "carrierCapacity": 10,
+  "carrierRation": 0.5,
+  "goalDays": 10,
+  "seed": 1,
+  "depotId": "kura",
+  "frontId": "jin",
+  "map": {
+    "nodes": [
+      { "id": "kura", "name": "蔵",       "kind": "depot",   "x": 10, "y": 60 },
+      { "id": "juku", "name": "宿場",     "kind": "village", "x": 50, "y": 70 },
+      { "id": "jin",  "name": "前線の陣", "kind": "front",   "x": 88, "y": 46 }
+    ],
+    "links": [
+      { "a": "kura", "b": "juku", "days": 3 },
+      { "a": "juku", "b": "jin",  "days": 3 }
+    ]
+  },
+  "nodes": {
+    "kura": { "rice": 200 },
+    "jin":  { "rice": 60 }
+  },
+  "army": { "troops": 10, "ration": 0.5, "capacityPer": 2 },
+  "scoring": { "perPerson": 10, "perSurplus": 1 },
+  "convoys": [
+    { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" }
+  ]
+}

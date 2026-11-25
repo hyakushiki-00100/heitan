@@ -1,0 +1,35 @@
+{
+  "id": "t-2",
+  "title": "練習2 ― 近い道と安全な道",
+  "stepDays": 0.5,
+  "carrierCapacity": 10,
+  "carrierRation": 0.5,
+  "goalDays": 8,
+  "seed": 1,
+  "depotId": "kura",
+  "frontId": "jin",
+  "map": {
+    "nodes": [
+      { "id": "kura", "name": "蔵",       "kind": "depot", "x": 10, "y": 58 },
+      { "id": "kawa", "name": "河原",     "kind": "camp",  "x": 46, "y": 80 },
+      { "id": "toge", "name": "峠",       "kind": "pass",  "x": 50, "y": 24 },
+      { "id": "jin",  "name": "前線の陣", "kind": "front", "x": 88, "y": 56 }
+    ],
+    "links": [
+      { "a": "kura", "b": "kawa", "days": 1.5 },
+      { "a": "kawa", "b": "jin",  "days": 1.5, "risk": { "label": "川越え", "chance": 0.4, "loss": 0.4 } },
+      { "a": "kura", "b": "toge", "days": 2.5 },
+      { "a": "toge", "b": "jin",  "days": 2.5 }
+    ]
+  },
+  "nodes": {
+    "kura": { "rice": 200 },
+    "jin":  { "rice": 30 }
+  },
+  "army": { "troops": 10, "ration": 0.5, "capacityPer": 4, "retreat": ["jin", "toge", "kura"] },
+  "scoring": { "perPerson": 10, "perSurplus": 1 },
+  "convoys": [
+    { "id": "c1", "name": "一番荷駄", "carriers": 5, "at": "kura" },
+    { "id": "c2", "name": "二番荷駄", "carriers": 5, "at": "kura" }
+  ]
+}

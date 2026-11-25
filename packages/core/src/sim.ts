@@ -66,6 +66,8 @@ export interface ArmySetup {
    * 1にすると「足りなければ即全員離脱」になり、少しの不足でも全滅するので厳しすぎる。
    */
   hungerDropRate?: number;
+  /** 最初の撤退路(陣から蔵までの拠点の列)。省略時は日数の最も短い道 */
+  retreat?: string[];
   /**
    * health の物資が足りないとき、兵のうち1日に体を壊して離脱する割合(不足の割合を掛ける)。省略時 0.02。
    * 端数は持ち越すので、少しの不足でも長く続けば離脱が出る
@@ -179,6 +181,10 @@ export function validateScenario(sc: Scenario): void {
   if (!ids.has(sc.depotId)) throw new Error(`depotId が地図にない: ${sc.depotId}`);
   if (!ids.has(sc.frontId)) throw new Error(`frontId が地図にない: ${sc.frontId}`);
   if (sc.depotId === sc.frontId) throw new Error('depotId と frontId は別の拠点にする');
+  if (sc.army.retreat) {
+    const r = sc.army.retreat;
+    if (!routeFromNodes(sc.map, r) || r[0] !== sc.frontId || r[r.length - 1] !== sc.depotId) throw new Error('army.retreat が陣から蔵への道になっていない');
+  }
   if (!shortestRoute(sc.map, sc.frontId, sc.depotId)) throw new Error('陣から蔵への道がない');
   for (const l of sc.map.links) {
     const steps = l.days / sc.stepDays;
@@ -321,7 +327,7 @@ export function createState(scenario: Scenario, seed: number = scenario.seed): S
       goods: emptyGoods(),
       healthDebt: 0,
       move: null,
-      retreatNodes: defaultRoute(scenario, scenario.frontId, scenario.depotId)!.nodes,
+      retreatNodes: scenario.army.retreat ? [...scenario.army.retreat] : defaultRoute(scenario, scenario.frontId, scenario.depotId)!.nodes,
       phase: 'hold',
       dropped: 0,
     },
