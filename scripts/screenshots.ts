@@ -95,7 +95,7 @@ async function main(): Promise<void> {
           errors.push(`${id}/${device}: 予期しないダイアログ「${d.message()}」`);
           void d.dismiss();
         });
-        await p.goto(`${BASE}?s=${id}&seed=1`);
+        await p.goto(`${BASE}classic.html?s=${id}&seed=1`);
         const name = (n: string) => `${id}-${n}-${device}`;
         // 練習の遠征は、始めに説明が出る
         if (await p.isVisible('#intro')) {
@@ -132,6 +132,38 @@ async function main(): Promise<void> {
         await shoot(p, name('5-result'), errors);
         await ctx.close();
       }
+    }
+    // 遠征の試作(index.html): 軍議 → 出陣 → 最初の出来事 → 終わりまで(いつも先頭の選択肢を選ぶ)
+    for (const [device, opts] of [
+      ['pc', { viewport: { width: 1200, height: 900 }, deviceScaleFactor: 1 }],
+      ['phone', { ...devices['iPhone 13 landscape'], viewport: { width: 750, height: 230 } }],
+      ['portrait', { ...devices['iPhone 13'], viewport: { width: 390, height: 600 } }],
+    ] as const) {
+      const ctx = await browser.newContext(opts);
+      const p = await ctx.newPage();
+      p.on('pageerror', (e) => errors.push(`ex/${device}: ${e.message}`));
+      p.on('console', (m) => m.type() === 'error' && errors.push(`ex/${device}: ${m.text()}`));
+      await p.goto(`${BASE}?seed=3`);
+      const name = (n: string) => `ex-${n}-${device}`;
+      await shoot(p, name('1-plan'), errors);
+      await p.click('[data-act="start"]');
+      await shoot(p, name('2-start'), errors);
+      let evShot = false;
+      for (let i = 0; i < 100 && !(await p.isVisible('[data-act="again"]')); i++) {
+        const ev = await p.$('[data-act^="c:"]:not([disabled])');
+        if (ev) {
+          if (!evShot) await shoot(p, name('3-event'), errors);
+          evShot = true;
+          await ev.click();
+          continue;
+        }
+        const go = await p.$('[data-act^="go:"]');
+        if (!go) break;
+        await go.click();
+      }
+      if (!(await p.isVisible('[data-act="again"]'))) errors.push(`ex/${device}: 終わりまで進めなかった`);
+      await shoot(p, name('4-end'), errors);
+      await ctx.close();
     }
     await browser.close();
   } finally {

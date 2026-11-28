@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>兵糧奉行(試作)</title>
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+  <!-- 上の帯は1本だけ(狭い画面では2行に折り返す)。地図をできるだけ広く取る -->
+  <header id="bar">
+    <button id="btn-menu" type="button" class="tab" data-tab="menu" aria-label="メニュー">☰</button>
+    <div id="clock"></div>
+    <nav id="tabs" aria-label="パネル">
+      <button type="button" class="tab" data-tab="convoys">隊</button>
+      <button type="button" class="tab" data-tab="retreat">撤退</button>
+      <button type="button" class="tab" data-tab="cards">カード</button>
+      <button type="button" class="tab" data-tab="log">報告</button>
+    </nav>
+    <div class="play">
+      <button id="btn-play" type="button">▶ 進める</button>
+      <button id="btn-speed" type="button">×1</button>
+    </div>
+  </header>
+  <!-- 説明は地図に重ねず、地図の上に帯として出す(低い画面で拠点を隠さないように) -->
+  <p id="hint" class="hint"><span id="hint-text"></span><button type="button" id="btn-hint-close" aria-label="説明を閉じる">×</button></p>
+  <main>
+    <div id="map-wrap">
+      <canvas id="map"></canvas>
+    </div>
+    <!-- 必要なときだけ開く札(横長の画面では右、縦長の画面では下)。1度に1つの中身だけを出す -->
+    <aside id="sheet" hidden>
+      <div class="sheet-head">
+        <h2 id="sheet-title"></h2>
+        <button type="button" id="btn-sheet-close" aria-label="閉じる">×</button>
+      </div>
+      <div class="sheet-body">
+        <section data-pane="order"><div id="order-body"></div></section>
+        <section data-pane="node"><div id="node-body"></div></section>
+        <section data-pane="convoys"><div id="convoys"></div></section>
+        <section data-pane="retreat"><div id="retreat" class="retreat"></div></section>
+        <section data-pane="cards"><div id="cards" class="cards"></div></section>
+        <section data-pane="log"><ol id="log"></ol></section>
+        <section data-pane="menu">
+          <p class="menu-title">兵糧奉行 <small id="ver"></small></p>
+          <label class="scenario-pick"><span class="lbl">シナリオ</span> <select id="scenario"></select></label>
+          <p><small id="seed"></small></p>
+          <label class="check"><input id="chk-autopause" type="checkbox" checked /> 手動の隊が着いたら止める</label>
+          <div class="row wrap">
+            <button id="btn-glossary" type="button">用語集</button>
+            <button id="btn-share-open" type="button">共有文字列を読む</button>
+            <button id="btn-restart" type="button">最初からやり直す</button>
+          </div>
+        </section>
+      </div>
+    </aside>
+  </main>
+  <div id="result" hidden>
+    <div class="result-box">
+      <p id="result-stars" class="stars"></p>
+      <p id="result-text"></p>
+      <div id="result-share" class="share"></div>
+      <div class="result-actions">
+        <button id="btn-retry" type="button">もう一度</button>
+        <button id="btn-next" type="button" class="primary" hidden>次へ</button>
+      </div>
+    </div>
+  </div>
+  <!-- 練習の遠征の始めに出す説明 -->
+  <div id="intro" hidden>
+    <div class="intro-box">
+      <p id="intro-title" class="intro-title"></p>
+      <ul id="intro-list"></ul>
+      <button id="btn-intro-start" type="button" class="primary big-go">はじめる</button>
+    </div>
+  </div>
+  <div id="tip" class="tip" role="tooltip" hidden></div>
+  <dialog id="glossary" class="glossary">
+    <h2 tabindex="-1">用語集</h2>
+    <dl class="glossary-list"></dl>
+    <button type="button" class="glossary-close">閉じる</button>
+  </dialog>
+  <dialog id="share-dialog" class="glossary">
+    <h2 tabindex="-1">共有文字列を読む</h2>
+    <p class="note">受け取った文字列(HY1-…)を貼り付けてください。</p>
+    <textarea id="share-input" rows="3" spellcheck="false"></textarea>
+    <div class="row"><button type="button" id="btn-share-read">読む</button><button type="button" class="glossary-close" id="btn-share-close">閉じる</button></div>
+    <div id="share-out"></div>
+  </dialog>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

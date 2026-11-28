@@ -3,8 +3,8 @@
  * 拠点の絵は、中心 (x, y) のまわり 幅48×高さ36(k=1 のとき)に収める。地面は y+12、屋根の上は y-24
  */
 
-export type NodeIcon = 'kura' | 'mura' | 'shuku' | 'kawara' | 'ura' | 'toge' | 'seki' | 'toride' | 'jin';
-export const NODE_ICONS: NodeIcon[] = ['kura', 'mura', 'shuku', 'kawara', 'ura', 'toge', 'seki', 'toride', 'jin'];
+export type NodeIcon = 'kura' | 'mura' | 'shuku' | 'kawara' | 'ura' | 'toge' | 'seki' | 'toride' | 'jin' | 'shiro' | 'mori' | 'no';
+export const NODE_ICONS: NodeIcon[] = ['kura', 'mura', 'shuku', 'kawara', 'ura', 'toge', 'seki', 'toride', 'jin', 'shiro', 'mori', 'no'];
 
 const P = {
   ink: '#2b2620',
@@ -282,6 +282,46 @@ const DRAW: Record<NodeIcon, (ctx: Ctx) => void> = {
     line(ctx, [-3, 4, 3, 4], P.ink, 1.8);
     // 幕を張る杭
     for (const x of [-22, -11, 11, 22]) line(ctx, [x, -6, x, 13], P.woodDark, 1.2);
+  },
+  // 城: 石垣の上に白壁の天守(2重の屋根)
+  shiro: (ctx) => {
+    ground(ctx, 24);
+    poly(ctx, [-20, 12, 20, 12, 15, -1, -15, -1], '#a9a196');
+    for (const [x0, y0] of [
+      [-16, 9],
+      [-6, 9],
+      [4, 9],
+      [-11, 4],
+      [-1, 4],
+      [9, 4],
+    ] as const)
+      line(ctx, [x0, y0, x0 + 8, y0], P.ink, 0.6);
+    rect(ctx, -11, -9, 22, 8, P.wall);
+    rect(ctx, -3, -7, 6, 6, P.roof, P.ink, 0.8);
+    tileRoof(ctx, -15, 15, -9, -14, 3);
+    rect(ctx, -7, -20, 14, 6, P.wall);
+    tileRoof(ctx, -10, 10, -20, -25, 3);
+    // 鯱
+    line(ctx, [-6, -26, -7, -29], P.ink, 1.4);
+    line(ctx, [6, -26, 7, -29], P.ink, 1.4);
+  },
+  // 森: 松が4本
+  mori: (ctx) => {
+    ground(ctx, 22);
+    pine(ctx, -12, 10, 1.2);
+    pine(ctx, 10, 10, 1.3);
+    pine(ctx, -1, 4, 1.5);
+    pine(ctx, 18, 12, 0.9);
+  },
+  // 野: 草むらと小さな田
+  no: (ctx) => {
+    ground(ctx, 20);
+    for (let i = 0; i < 3; i++) rect(ctx, -16 + i * 9, 4, 8, 6, 'rgba(128,150,82,0.35)', 'rgba(93,122,74,0.9)', 0.8);
+    for (const x of [-14, 12, 18]) {
+      line(ctx, [x, 0, x - 2, -6], P.green, 1.2);
+      line(ctx, [x, 0, x + 1, -7], P.green, 1.2);
+      line(ctx, [x, 0, x + 3, -5], P.green, 1.2);
+    }
   },
 };
 

@@ -7,3 +7,4 @@ export * from './sim';
 export * from './score';
 export * from './rules';
 export * from './share/codec';
+export * from './expedition';

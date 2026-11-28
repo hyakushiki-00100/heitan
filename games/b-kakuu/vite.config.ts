@@ -14,5 +14,15 @@ export default defineConfig({
       '@hyoro/platform': fileURLToPath(new URL('../../packages/platform/src/index.ts', import.meta.url)),
     },
   },
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    // index.html = 遠征の試作(作り直し)、classic.html = 前の版(補給網)
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        classic: fileURLToPath(new URL('./classic.html', import.meta.url)),
+      },
+    },
+  },
 });
