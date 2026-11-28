@@ -342,8 +342,8 @@ function renderRetreat(): void {
     const lost = a.dropped > 0 ? `<br><span class="bad">${t('離脱')}した兵: ${a.dropped}人</span>` : '';
     box.innerHTML =
       a.phase === 'retreat'
-        ? `兵${a.troops}人が蔵へ撤退中。持っている ${amountsText(a.cargo, a.goods)}。${lost}`
-        : `兵${a.troops}/${a.troopsTotal}人が帰還。${lost}`;
+        ? `撤退中: 兵${a.troops}人・持っている${amountsText(a.cargo, a.goods)}${lost}`
+        : `帰還: 兵${a.troops}/${a.troopsTotal}人${lost}`;
     return;
   }
   const p = retreatPlan(state);
@@ -351,7 +351,7 @@ function renderRetreat(): void {
   const opts = candidateRoutes(sc.map, sc.frontId, sc.depotId, 3);
   const cur = p.route.nodes.join('>');
   const rows = [
-    '<div>撤退路を選ぶ:</div><div class="dests">' +
+    '<h3>撤退路</h3><div class="dests">' +
       opts
         .map(
           (r, i) =>
@@ -359,10 +359,8 @@ function renderRetreat(): void {
         )
         .join('') +
       '</div>',
-    goodsOf(sc).length
-      ? `<div>兵${a.troops}人 × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る${splitText(p.need, p.shares)}。兵が持てるのは合計 <b class="num">${fmt(p.capacity)}</b> まで</div>`
-      : `<div>兵${a.troops}人 × ${a.ration} × ${p.route.days}日 = <b class="num">${fmt(p.need)}</b> 要る。兵が持てるのは <b class="num">${fmt(p.capacity)}</b> まで</div>`,
-    `<div>${nodeName(a.at)}から持ち出す: ${fmt(p.fromFront)}${splitText(p.fromFront, p.shares)}(撤退の日に陣に残っている分から)</div>`,
+    `<div>要る <b class="num">${fmt(p.need)}</b>${splitText(p.need, p.shares)} ・ 兵が持てる <b class="num">${fmt(p.capacity)}</b></div>`,
+    `<div>陣から持ち出す <b class="num">${fmt(p.fromFront)}</b></div>`,
   ];
   for (const s of p.stops) {
     if (s.required <= 0) continue;
@@ -374,16 +372,16 @@ function renderRetreat(): void {
       return amountsText(rice, am);
     })() : fmt(s.have);
     rows.push(
-      `<div>${nodeName(s.id)}に${t('置き米')}: <b class="num">${fmt(s.required)}</b>${splitText(s.required, p.shares)} ` +
-        `<span class="${ok ? 'good' : 'bad'}">(今 ${now}${ok ? ' ✓' : ''})</span></div>`,
+      `<div>${nodeName(s.id)}に${t('置き米')} <b class="num">${fmt(s.required)}</b>${splitText(s.required, p.shares)} ` +
+        `<span class="${ok ? 'good' : 'bad'}">(今${now}${ok ? ' ✓' : ''})</span></div>`,
     );
   }
   for (const r of p.risks) {
     rows.push(
-      `<div class="bad">⚠ ${nodeName(r.a)}→${nodeName(r.b)}の${r.risk.label}: ${Math.round(r.risk.chance * 100)}%の確率で、持っている米の${Math.round(r.risk.loss * 100)}%を失う(この見積もりには入っていません)</div>`,
+      `<div class="bad">⚠ ${r.risk.label}(${nodeName(r.a)}→${nodeName(r.b)}) ${Math.round(r.risk.chance * 100)}%で荷−${Math.round(r.risk.loss * 10)}割(上の数に含まない)</div>`,
     );
   }
-  rows.push(`<div class="note">兵は要る分しか受け取りません。多く置いた米は残り、${t('余剰')}として減点されます。</div>`);
+  rows.push(`<div class="note">置きすぎた分は${t('余剰')}として減点</div>`);
   box.innerHTML = rows.join('');
   box.querySelectorAll<HTMLButtonElement>('[data-retreat]').forEach((b) => {
     b.onclick = () => {
@@ -415,7 +413,7 @@ function renderNode(): void {
     const stop = retreatPlan(state).stops.find((x) => x.id === id && x.required > 0);
     if (stop) {
       const ok = stop.have + EPS >= stop.required;
-      rows.push(`<div class="stock">撤退用の${t('置き米')}: <span class="${ok ? 'good' : 'bad'}">${fmt(stop.have)}/${fmt(stop.required)}${ok ? ' ✓' : ''}</span></div>`);
+      rows.push(`<div class="stock">${t('置き米')}: <span class="${ok ? 'good' : 'bad'}">${fmt(stop.have)}/${fmt(stop.required)}${ok ? ' ✓' : ''}</span></div>`);
     }
   }
   const m = state.markets[id];
@@ -430,7 +428,7 @@ function renderNode(): void {
       `<h3>${t('市')}</h3>`,
       `<div class="stock">残り 米${fmt(m.left)} ・ ${t('米価')} ${price.toFixed(2)}</div>`,
       `<div class="row wrap">${btn(10)}${btn(25)}</div>`,
-      `<div class="note">買った米はここに置かれ、運搬隊が運びます。払った額は村への負担として減点。買うほど米価が上がります。</div>`,
+      `<div class="note">買うほど高くなる。払った額は減点</div>`,
     );
   }
   for (const o of state.orders) {
@@ -487,8 +485,8 @@ function renderCards(): void {
   const cur = state.autoRoute.join('>');
   const rows = [
     `<div class="row"><button type="button" id="btn-all-auto">${autoCount === alive ? '全隊を手動に' : '全隊を自動に'}</button>` +
-      `<span class="note">自動の隊: ${autoCount}/${alive}</span></div>`,
-    '<div>自動便の道:</div><div class="dests">' +
+      `<span class="note">自動 ${autoCount}/${alive}隊</span></div>`,
+    '<h3>自動の隊の道</h3><div class="dests">' +
       opts
         .map(
           (r, i) =>
@@ -499,7 +497,7 @@ function renderCards(): void {
   ];
   for (const card of cards) {
     const on = state.activeCards.includes(card.id);
-    const extra = card.id === 'chukei' ? `(今の中継地: ${relay ? nodeName(relay) : 'なし'})` : '';
+    const extra = card.id === 'chukei' ? `(中継地: ${relay ? nodeName(relay) : 'なし'})` : '';
     rows.push(
       `<button type="button" class="card${on ? ' on' : ''}" data-card="${card.id}" aria-pressed="${on}">` +
         `<span class="card-name">${on ? '◉' : '○'} ${card.name}</span><span class="card-text">${card.text}${extra}</span></button>`,
@@ -535,19 +533,19 @@ function renderHint(): void {
   if (state.convoys.some((c) => c.move)) dispatchedOnce = true;
   const c = selectedConvoy();
   if (pickingFrom()) {
-    hint = '行き先の拠点(点線の輪)を押してください。';
+    hint = '行き先(点線の輪)を押す';
   } else if (c && dest) {
-    hint = '積む量を決めて「出発」を押してください。';
+    hint = '積む量を決めて「出発」';
   } else if (!dispatchedOnce) {
-    hint = `蔵の横の足軽(${t('運搬隊')})を押し、行き先に<b>前線の${t('陣')}</b>を押してください。運ぶ人も道中で米を食べます。<b>遠いほど届く量が減ります。</b>`;
+    hint = `蔵の横の足軽を押し、行き先に<b>前線の${t('陣')}</b>を押す`;
   } else if (a.phase === 'retreat') {
-    hint = `${t('撤退')}中です。蔵の外に残った隊は帰還に数えません。${t('帰り分')}を持たせて蔵へ戻してください。`;
+    hint = `${t('撤退')}中。外にいる隊は蔵へ戻す(戻らないと帰還に数えない)`;
   } else if (a.phase === 'hold' && day >= goal - 6) {
-    hint = `${fmt(goal)}日目に${t('撤退')}が始まります。「撤退」の札で、撤退路に置く米を確かめてください。`;
+    hint = `${fmt(goal)}日目に${t('撤退')}。「撤退」で${t('置き米')}を確かめる`;
   } else if (a.phase === 'hold' && state.convoys.some((x) => !x.move && !x.dropped && !x.auto && x.at === state.scenario.frontId)) {
-    hint = `陣に着いた隊は、陣の横の足軽を押し、行き先に蔵を押して「帰り分だけ」で戻してください(${t('帰り分')})。`;
+    hint = `陣に着いた隊は、蔵へ「${t('空荷')}」で戻す`;
   } else if (!running && state.convoys.some((x) => x.move)) {
-    hint = '▶ で時を進めます。';
+    hint = '▶ で進める';
   } else {
     hint = '';
   }
@@ -628,36 +626,35 @@ function previewHtml(nodes: string[]): string {
   const scaled = (f: number) => Object.fromEntries(Object.entries(arriveGoods).map(([k, v]) => [k, v * f]));
   // 大事な「着く量」を先に、短く書く。計算の内訳は小さな字で最後に
   const lines: string[] = [];
-  const eatNote = `<span class="note">道中で人足が米${fmt(p.eat)}を食べる(${c.carriers}人×${fmt(ration)}×${fmt(p.route.days)}日)</span>`;
+  const eatNote = `<span class="note">道中で米${fmt(p.eat)}を食べる(${c.carriers}人×${fmt(ration)}×${fmt(p.route.days)}日)</span>`;
   const fg = fodderGood(state.scenario);
   if (fg && c.horses > 0) {
     const have = goodsLoad[fg.id] ?? 0;
     const carriersCap = c.carriers * state.scenario.carrierCapacity;
     if (have + EPS < p.fodderNeed && load + goodsTotal > carriersCap + EPS) {
       // 荷を捨てるので、満載で届くような到着量は出さない
-      lines.push(
-        `<span class="bad">${t(fg.name)}が足りない(要る${fmt(p.fodderNeed)}・積んだ${fmt(have)})。道中で馬が運べなくなり、${carriersCap}を超える荷を捨てます。</span>`,
-        eatNote,
-      );
+      lines.push(`<span class="bad">${t(fg.name)}が足りない(要る${fmt(p.fodderNeed)})。馬が止まり、${carriersCap}を超える荷を捨てる。</span>`, eatNote);
       return lines.join('<br>');
     }
-    lines.push(`<span class="note">馬が道中で${fg.name}${fmt(p.fodderNeed)}を食べる(積んだ${fmt(have)})</span>`);
+    lines.push(`<span class="note">馬が${fg.name}${fmt(p.fodderNeed)}を食べる(積んだ${fmt(have)})</span>`);
   }
   if (p.arrive + EPS < 0) {
-    lines.unshift(`<span class="bad">道中で食料が尽き、人足が${t('離脱')}します(荷も失う)。</span>`);
-  } else if (!p.risks.length && !p.raids.length) {
-    lines.unshift(`到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
+    lines.unshift(`<span class="bad">途中で食べ物が尽き、人足が${t('離脱')}する。</span>`);
   } else {
+    lines.unshift(`着く <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`);
     const r = [
-      ...p.risks.map((x) => `${x.risk.label} ${Math.round(x.risk.chance * 100)}%で荷の${Math.round(x.risk.loss * 100)}%を失う`),
-      ...p.raids.map((x) => `${x.raid.label} 1日${Math.round(x.raid.chancePerDay * 100)}%で襲われ荷の${Math.round(x.raid.loss * 100)}%を失う(何度も)`),
+      ...p.risks.map((x) => `${x.risk.label} ${Math.round(x.risk.chance * 100)}%で荷−${Math.round(x.risk.loss * 10)}割`),
+      ...p.raids.map((x) => `${x.raid.label} 1日${Math.round(x.raid.chancePerDay * 100)}%で荷−${Math.round(x.raid.loss * 10)}割`),
     ].join('・');
-    lines.unshift(
-      `無事なら到着 <b class="num">${amountsText(Math.max(0, p.arrive), arriveGoods)}</b>`,
-      p.arriveWorst + EPS >= 0
-        ? `<span class="warn">⚠ ${r} → ${p.raids.length ? '各1回' : ''}起きれば <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
-        : `<span class="bad">⚠ ${r}。起きると道中で食料が尽き、人足が離脱します。</span>`,
-    );
+    if (r) {
+      lines.splice(
+        1,
+        0,
+        p.arriveWorst + EPS >= 0
+          ? `<span class="warn">⚠ ${r} → <b class="num">${amountsText(p.arriveWorst, scaled(keep))}</b></span>`
+          : `<span class="bad">⚠ ${r} → 起きると途中で食べ物が尽きる</span>`,
+      );
+    }
   }
   lines.push(eatNote);
   return lines.join('<br>');
@@ -703,7 +700,7 @@ function renderOrder(): void {
     return;
   }
   // 練習で自動を使わないときは出さない(要素が残るよう、隠すだけにする)
-  const autoBtn = `<div class="row"${hidden('auto') ? ' hidden' : ''}><button type="button" id="btn-auto">${c.auto ? 'この隊を手動に戻す' : 'この隊を自動にする'}</button></div>`;
+  const autoBtn = `<div class="row"${hidden('auto') ? ' hidden' : ''}><button type="button" id="btn-auto">${c.auto ? '手動に戻す' : '自動にする'}</button></div>`;
   const bindAuto = () => {
     $('btn-auto').onclick = () => {
       setAuto(state, c.id, !c.auto);
@@ -712,12 +709,12 @@ function renderOrder(): void {
     };
   };
   if (c.auto) {
-    body.innerHTML = `<p class="preview">${c.name}は${t('ルールカード', 'ルールカード')}に従って自動で動いています。手動に戻すと指図できます。</p>${autoBtn}`;
+    body.innerHTML = `<p class="preview">${c.name}は自動で動いています(${t('ルールカード')}に従う)。</p>${autoBtn}`;
     bindAuto();
     return;
   }
   if (c.move) {
-    body.innerHTML = `<p class="preview">${c.name}は移動中です。着くまで指図できません。</p>${autoBtn}`;
+    body.innerHTML = `<p class="preview">${c.name}は移動中。着いたら指図できます。</p>${autoBtn}`;
     bindAuto();
     return;
   }
@@ -729,7 +726,7 @@ function renderOrder(): void {
   const head = `<p class="order-head"><b>${idx}. ${c.name}</b>(${who})・${nodeName(c.at)}${dest ? ` → <b>${nodeName(dest)}</b>` : 'にいる'}</p>`;
   const others = state.convoys.filter((x) => x !== c && !x.dropped && !x.move && !x.auto && x.at === c.at);
   const switchHtml = others.length
-    ? '<div class="row wrap">隊を替える: ' + others.map((x) => `<button type="button" data-pick="${x.id}">${state.convoys.indexOf(x) + 1}</button>`).join('') + '</div>'
+    ? '<div class="row wrap">ほかの隊: ' + others.map((x) => `<button type="button" data-pick="${x.id}">${state.convoys.indexOf(x) + 1}</button>`).join('') + '</div>'
     : '';
   const destHtml =
     '<div class="dests">' +
@@ -739,7 +736,7 @@ function renderOrder(): void {
       .join('') +
     '</div>';
   const parts: string[] = [head];
-  if (!dest) parts.push('<div class="note">行き先の拠点を地図で押すか、ここで選んでください。</div>', destHtml, switchHtml);
+  if (!dest) parts.push('<div class="note">行き先を選ぶ(地図の拠点を押してもよい)</div>', destHtml, switchHtml);
   const route = currentRoute();
   const opts = routeOptions();
   let safe: number | null = null;
@@ -777,16 +774,15 @@ function renderOrder(): void {
       `<button type="button" id="btn-go" class="primary big-go">出発させる</button>`,
       '<h3>積む量</h3>',
       `<div class="row">米 <input id="load" type="range" min="0" max="${max}" step="0.5" value="${load}" /> <b id="load-val" class="num">${fmt(load)}</b></div>`,
-      `<div class="row wrap"><button type="button" id="load-full">${goodsOf(sc).length ? '残りを米で満載' : `満載(${fmt(max)})`}</button>` +
-        (goodsOf(sc).length ? '<button type="button" id="load-mix">陣の割合で満載</button>' : '') +
-        `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>帰り分だけ(${fmt(eat)})</button>` +
-        (needsBuffer
-          ? `<button type="button" id="load-safe" ${safe === null ? 'disabled' : ''}>荷を失っても尽きない分${safeNeed === null ? '' : `(${fmt(safeNeed)})`}</button>`
-          : '') +
+      // 積む量の早押し: 満載/おまかせ(米と物資を陣の使う割合で満載)/空荷(道中で食べる分だけ)/予備つき(危険で荷を失っても食べ物が尽きない分)
+      `<div class="row wrap"><button type="button" id="load-full">${goodsOf(sc).length ? '米で満載' : `満載 ${fmt(max)}`}</button>` +
+        (goodsOf(sc).length ? '<button type="button" id="load-mix">おまかせ</button>' : '') +
+        `<button type="button" id="load-back" ${eat > max + EPS ? 'disabled' : ''}>${t('空荷')} ${fmt(eat)}</button>` +
+        (needsBuffer ? `<button type="button" id="load-safe" ${safe === null ? 'disabled' : ''}>${t('予備つき')}${safeNeed === null ? '' : ` ${fmt(safeNeed)}`}</button>` : '') +
         '</div>',
       ...(goodsOf(sc).length
         ? [
-            `<details><summary>米以外(${goodsOf(sc).map((g) => g.name).join('・')})を細かく決める</summary>` +
+            `<details><summary>${goodsOf(sc).map((g) => g.name).join('・')}を調整</summary>` +
               goodsOf(sc)
                 .map(
                   (g) =>
@@ -914,19 +910,15 @@ function showResult(): void {
   const scoring = sc.scoring ?? { perPerson: 10, perSurplus: 1 };
   let text: string;
   if (!r.held) {
-    text = `第${fmt(currentDay(state))}日、${nodeName(sc.frontId)}の兵糧が尽きました。\n遠征は失敗です。`;
+    text = `${fmt(currentDay(state))}日目、陣の兵糧が尽きた。失敗。`;
   } else {
     const where = r.surplusByNode.map((x) => `${nodeName(x.id)} ${fmt(x.amount)}`).join('、');
     text = [
-      `${sc.goalDays}日間${nodeName(sc.frontId)}を保ち、撤退しました。`,
-      '',
-      `帰還: 兵 ${r.troopsHome}/${r.troopsTotal}人 ・ 人足 ${r.carriersHome}/${r.carriersTotal}人`,
-      `  → +${(r.troopsHome + r.carriersHome) * scoring.perPerson}点(1人${scoring.perPerson}点)`,
-      `余剰(蔵の外に残した米・物資): ${fmt(r.surplus)}${where ? `(${where})` : ''}`,
-      `  → −${fmt(r.surplus * scoring.perSurplus)}点(村への負担)`,
-      ...(r.purchaseBurden > 0 ? [`市で米を買った負担: −${fmt(r.purchaseBurden)}点(村への負担)`] : []),
-      '',
-      `得点 ${fmt(r.score)} / 満点 ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
+      `${sc.goalDays}日間、陣を保って撤退した。`,
+      `帰還 兵${r.troopsHome}/${r.troopsTotal}・人足${r.carriersHome}/${r.carriersTotal} → +${(r.troopsHome + r.carriersHome) * scoring.perPerson}`,
+      `余り ${fmt(r.surplus)}${where ? `(${where})` : ''} → −${fmt(r.surplus * scoring.perSurplus)}`,
+      ...(r.purchaseBurden > 0 ? [`市で買った → −${fmt(r.purchaseBurden)}`] : []),
+      `得点 ${fmt(r.score)} / ${(r.troopsTotal + r.carriersTotal) * scoring.perPerson}`,
       bestLine,
     ].join('\n');
   }
@@ -965,10 +957,10 @@ function renderShare(r: ReturnType<typeof evaluate>): void {
   if (box.dataset.code === code) return; // 何度も呼ばれるので、同じなら作り直さない(選択が外れないように)
   box.dataset.code = code;
   box.innerHTML =
-    '<div>共有文字列(同じシナリオ・シードで、ほかの人も同じ展開を遊べます):</div>' +
+    '<div>共有(同じ展開で遊べる文字列)</div>' +
     `<input id="share-code" readonly value="${code}" />` +
     '<div class="row"><button type="button" id="btn-copy">コピー</button>' +
-    `<a href="${url}">この展開をもう一度(シード ${seed})</a></div>`;
+    `<a href="${url}">同じ展開で遊ぶ</a></div>`;
   $('btn-copy').onclick = async () => {
     const input = $<HTMLInputElement>('share-code');
     try {
